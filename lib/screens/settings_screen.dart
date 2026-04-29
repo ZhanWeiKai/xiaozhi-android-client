@@ -1895,7 +1895,7 @@ class _SettingsScreenState extends State<SettingsScreen>
                 title: '小智服务配置',
                 subtitle: '管理小智语音服务配置',
                 actionButton: ElevatedButton.icon(
-                  onPressed: _showAddXiaozhiConfigDialog,
+                  onPressed: _showAddServiceTypeDialog,
                   icon: const Icon(Icons.add, color: Colors.white, size: 18),
                   label: const Text(
                     '添加服务',
@@ -1990,7 +1990,9 @@ class _SettingsScreenState extends State<SettingsScreen>
                         ),
                       ),
                       Text(
-                        config.websocketUrl,
+                        (config.otaUrl?.isNotEmpty ?? false)
+                            ? 'OTA: ${config.otaUrl}'
+                            : 'MAC: ${config.macAddress}',
                         style: TextStyle(
                           color: Colors.grey.shade600,
                           fontSize: 14,
@@ -2071,12 +2073,12 @@ class _SettingsScreenState extends State<SettingsScreen>
                     crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
                       const Text(
-                        'Token:',
+                        'OTA地址:',
                         style: TextStyle(color: Colors.grey, fontSize: 14),
                       ),
                       const SizedBox(height: 4),
                       Text(
-                        config.token.isEmpty ? '未设置' : config.token,
+                        (config.otaUrl?.isEmpty ?? true) ? '未设置' : config.otaUrl!,
                         style: const TextStyle(fontSize: 14),
                       ),
                     ],
@@ -2150,10 +2152,378 @@ class _SettingsScreenState extends State<SettingsScreen>
     );
   }
 
+  /// 弹出选择服务类型窗口
+  void _showAddServiceTypeDialog() {
+    showDialog(
+      context: context,
+      builder: (context) => Dialog(
+        shape: RoundedRectangleBorder(
+          borderRadius: BorderRadius.circular(20),
+        ),
+        elevation: 8,
+        child: Container(
+          padding: const EdgeInsets.all(24),
+          decoration: BoxDecoration(
+            color: Colors.white,
+            borderRadius: BorderRadius.circular(20),
+            boxShadow: [
+              BoxShadow(
+                color: Colors.black.withOpacity(0.1),
+                blurRadius: 12,
+                offset: const Offset(0, 4),
+              ),
+            ],
+          ),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
+              Row(
+                mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                children: [
+                  const Text(
+                    '添加小智服务',
+                    style: TextStyle(
+                      fontSize: 22,
+                      fontWeight: FontWeight.bold,
+                    ),
+                  ),
+                  Container(
+                    decoration: BoxDecoration(
+                      color: Colors.grey.shade100,
+                      borderRadius: BorderRadius.circular(12),
+                    ),
+                    child: IconButton(
+                      icon: const Icon(Icons.close, size: 22),
+                      onPressed: () => Navigator.pop(context),
+                      padding: const EdgeInsets.all(4),
+                      constraints: const BoxConstraints(),
+                    ),
+                  ),
+                ],
+              ),
+              const SizedBox(height: 8),
+              const Text(
+                '请选择服务连接方式',
+                style: TextStyle(color: Colors.grey, fontSize: 14),
+              ),
+              const SizedBox(height: 24),
+              // 自定义 Server 选项
+              InkWell(
+                onTap: () {
+                  Navigator.pop(context);
+                  _showAddCustomXiaozhiConfigDialog();
+                },
+                borderRadius: BorderRadius.circular(16),
+                child: Container(
+                  padding: const EdgeInsets.all(20),
+                  decoration: BoxDecoration(
+                    color: Colors.grey.shade50,
+                    borderRadius: BorderRadius.circular(16),
+                    border: Border.all(color: Colors.grey.shade200),
+                  ),
+                  child: Row(
+                    children: [
+                      Container(
+                        width: 48,
+                        height: 48,
+                        decoration: BoxDecoration(
+                          color: Colors.blue.shade50,
+                          borderRadius: BorderRadius.circular(12),
+                        ),
+                        child: Icon(Icons.dns, color: Colors.blue.shade600, size: 26),
+                      ),
+                      const SizedBox(width: 16),
+                      Expanded(
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            const Text(
+                              '自定义 Server',
+                              style: TextStyle(
+                                fontSize: 17,
+                                fontWeight: FontWeight.w600,
+                              ),
+                            ),
+                            const SizedBox(height: 4),
+                            Text(
+                              '通过 OTA 地址自动获取连接信息',
+                              style: TextStyle(
+                                color: Colors.grey.shade600,
+                                fontSize: 13,
+                              ),
+                            ),
+                          ],
+                        ),
+                      ),
+                      Icon(Icons.arrow_forward_ios, color: Colors.grey.shade400, size: 18),
+                    ],
+                  ),
+                ),
+              ),
+              const SizedBox(height: 12),
+              // 官方 xiaozhi.me 选项
+              InkWell(
+                onTap: () {
+                  Navigator.pop(context);
+                  _showAddXiaozhiConfigDialog();
+                },
+                borderRadius: BorderRadius.circular(16),
+                child: Container(
+                  padding: const EdgeInsets.all(20),
+                  decoration: BoxDecoration(
+                    color: Colors.grey.shade50,
+                    borderRadius: BorderRadius.circular(16),
+                    border: Border.all(color: Colors.grey.shade200),
+                  ),
+                  child: Row(
+                    children: [
+                      Container(
+                        width: 48,
+                        height: 48,
+                        decoration: BoxDecoration(
+                          color: Colors.orange.shade50,
+                          borderRadius: BorderRadius.circular(12),
+                        ),
+                        child: Icon(Icons.cloud, color: Colors.orange.shade600, size: 26),
+                      ),
+                      const SizedBox(width: 16),
+                      Expanded(
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            const Text(
+                              '官方 xiaozhi.me',
+                              style: TextStyle(
+                                fontSize: 17,
+                                fontWeight: FontWeight.w600,
+                              ),
+                            ),
+                            const SizedBox(height: 4),
+                            Text(
+                              '手动填写 WebSocket 地址',
+                              style: TextStyle(
+                                color: Colors.grey.shade600,
+                                fontSize: 13,
+                              ),
+                            ),
+                          ],
+                        ),
+                      ),
+                      Icon(Icons.arrow_forward_ios, color: Colors.grey.shade400, size: 18),
+                    ],
+                  ),
+                ),
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+
+  /// 添加自定义 xiaozhi-server 配置弹窗
+  void _showAddCustomXiaozhiConfigDialog() {
+    final nameController = TextEditingController();
+    final otaUrlController = TextEditingController();
+
+    showDialog(
+      context: context,
+      builder: (context) => Dialog(
+        shape: RoundedRectangleBorder(
+          borderRadius: BorderRadius.circular(20),
+        ),
+        elevation: 8,
+        child: Container(
+          padding: const EdgeInsets.all(24),
+          decoration: BoxDecoration(
+            color: Colors.white,
+            borderRadius: BorderRadius.circular(20),
+            boxShadow: [
+              BoxShadow(
+                color: Colors.black.withOpacity(0.1),
+                blurRadius: 12,
+                spreadRadius: 0,
+                offset: const Offset(0, 4),
+              ),
+            ],
+          ),
+          child: SingleChildScrollView(
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.stretch,
+              children: [
+                Row(
+                  mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                  children: [
+                    const Text(
+                      '添加自定义 Server',
+                      style: TextStyle(
+                        fontSize: 22,
+                        fontWeight: FontWeight.bold,
+                      ),
+                    ),
+                    Container(
+                      decoration: BoxDecoration(
+                        color: Colors.grey.shade100,
+                        borderRadius: BorderRadius.circular(12),
+                        boxShadow: [
+                          BoxShadow(
+                            color: Colors.black.withOpacity(0.05),
+                            blurRadius: 2,
+                            offset: const Offset(0, 1),
+                          ),
+                        ],
+                      ),
+                      child: IconButton(
+                        icon: const Icon(Icons.close, size: 22),
+                        onPressed: () => Navigator.pop(context),
+                        padding: const EdgeInsets.all(4),
+                        constraints: const BoxConstraints(),
+                      ),
+                    ),
+                  ],
+                ),
+                const SizedBox(height: 8),
+                const Text(
+                  '只需填写 OTA 地址，连接信息自动获取',
+                  style: TextStyle(color: Colors.grey, fontSize: 14),
+                ),
+                const SizedBox(height: 24),
+                // 服务名称
+                const Text(
+                  '服务名称',
+                  style: TextStyle(
+                    fontSize: 16,
+                    fontWeight: FontWeight.w600,
+                  ),
+                ),
+                const SizedBox(height: 8),
+                Container(
+                  decoration: BoxDecoration(
+                    color: Colors.white,
+                    borderRadius: BorderRadius.circular(12),
+                    border: Border.all(color: Colors.grey.shade300),
+                  ),
+                  child: TextField(
+                    controller: nameController,
+                    decoration: InputDecoration(
+                      hintText: '例如：我的小智',
+                      hintStyle: TextStyle(color: Colors.grey.shade400),
+                      contentPadding: const EdgeInsets.symmetric(
+                        horizontal: 16,
+                        vertical: 14,
+                      ),
+                      border: InputBorder.none,
+                    ),
+                  ),
+                ),
+                const SizedBox(height: 16),
+                // OTA URL
+                const Text(
+                  'OTA 地址',
+                  style: TextStyle(
+                    fontSize: 16,
+                    fontWeight: FontWeight.w600,
+                  ),
+                ),
+                const SizedBox(height: 8),
+                Container(
+                  decoration: BoxDecoration(
+                    color: Colors.white,
+                    borderRadius: BorderRadius.circular(12),
+                    border: Border.all(color: Colors.grey.shade300),
+                  ),
+                  child: TextField(
+                    controller: otaUrlController,
+                    keyboardType: TextInputType.url,
+                    decoration: InputDecoration(
+                      hintText: '例如：https://example.com/xiaozhi/ota/',
+                      hintStyle: TextStyle(color: Colors.grey.shade400),
+                      contentPadding: const EdgeInsets.symmetric(
+                        horizontal: 16,
+                        vertical: 14,
+                      ),
+                      border: InputBorder.none,
+                    ),
+                  ),
+                ),
+                const SizedBox(height: 4),
+                Text(
+                  'OTA 接口会自动返回 WebSocket 地址和认证 Token',
+                  style: TextStyle(color: Colors.grey, fontSize: 12),
+                ),
+                const SizedBox(height: 24),
+                // 添加按钮
+                ElevatedButton(
+                  onPressed: () {
+                    final name = nameController.text.trim();
+                    final otaUrl = otaUrlController.text.trim();
+
+                    if (name.isEmpty || otaUrl.isEmpty) {
+                      ScaffoldMessenger.of(context).showSnackBar(
+                        const SnackBar(content: Text('请填写所有必填字段')),
+                      );
+                      return;
+                    }
+
+                    Provider.of<ConfigProvider>(
+                      context,
+                      listen: false,
+                    ).addCustomXiaozhiConfig(name, otaUrl);
+
+                    Navigator.pop(context);
+                    ScaffoldMessenger.of(context).showSnackBar(
+                      const SnackBar(content: Text('自定义服务已添加')),
+                    );
+                  },
+                  style: ElevatedButton.styleFrom(
+                    backgroundColor: Colors.black,
+                    foregroundColor: Colors.white,
+                    elevation: 4,
+                    shadowColor: Colors.black.withOpacity(0.3),
+                    padding: const EdgeInsets.symmetric(vertical: 16),
+                    shape: RoundedRectangleBorder(
+                      borderRadius: BorderRadius.circular(12),
+                    ),
+                  ),
+                  child: const Text(
+                    '添加',
+                    style: TextStyle(
+                      fontSize: 16,
+                      fontWeight: FontWeight.w600,
+                    ),
+                  ),
+                ),
+                const SizedBox(height: 12),
+                OutlinedButton(
+                  onPressed: () => Navigator.pop(context),
+                  style: OutlinedButton.styleFrom(
+                    foregroundColor: Colors.black,
+                    side: const BorderSide(color: Colors.grey),
+                    padding: const EdgeInsets.symmetric(vertical: 16),
+                    shape: RoundedRectangleBorder(
+                      borderRadius: BorderRadius.circular(12),
+                    ),
+                  ),
+                  child: const Text(
+                    '取消',
+                    style: TextStyle(
+                      fontSize: 16,
+                      fontWeight: FontWeight.w500,
+                    ),
+                  ),
+                ),
+              ],
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+
   void _showAddXiaozhiConfigDialog() {
     final nameController = TextEditingController();
-    final websocketUrlController = TextEditingController();
-    final tokenController = TextEditingController();
     final macAddressController = TextEditingController();
 
     showDialog(
@@ -2187,7 +2557,7 @@ class _SettingsScreenState extends State<SettingsScreen>
                       mainAxisAlignment: MainAxisAlignment.spaceBetween,
                       children: [
                         const Text(
-                          '添加小智服务',
+                          '添加官方小智服务',
                           style: TextStyle(
                             fontSize: 22,
                             fontWeight: FontWeight.bold,
@@ -2216,7 +2586,7 @@ class _SettingsScreenState extends State<SettingsScreen>
                     ),
                     const SizedBox(height: 8),
                     const Text(
-                      '添加新的小智语音服务配置',
+                      '连接信息将自动通过 OTA 获取',
                       style: TextStyle(color: Colors.grey, fontSize: 14),
                     ),
                     const SizedBox(height: 24),
@@ -2246,42 +2616,6 @@ class _SettingsScreenState extends State<SettingsScreen>
                         controller: nameController,
                         decoration: InputDecoration(
                           hintText: '例如：家庭小智',
-                          hintStyle: TextStyle(color: Colors.grey.shade400),
-                          contentPadding: const EdgeInsets.symmetric(
-                            horizontal: 16,
-                            vertical: 14,
-                          ),
-                          border: InputBorder.none,
-                        ),
-                      ),
-                    ),
-                    const SizedBox(height: 16),
-                    const Text(
-                      'WebSocket地址',
-                      style: TextStyle(
-                        fontSize: 16,
-                        fontWeight: FontWeight.w600,
-                      ),
-                    ),
-                    const SizedBox(height: 8),
-                    Container(
-                      decoration: BoxDecoration(
-                        color: Colors.white,
-                        borderRadius: BorderRadius.circular(12),
-                        border: Border.all(color: Colors.grey.shade300),
-                        boxShadow: [
-                          BoxShadow(
-                            color: Colors.black.withOpacity(0.03),
-                            blurRadius: 4,
-                            spreadRadius: 0,
-                            offset: const Offset(0, 2),
-                          ),
-                        ],
-                      ),
-                      child: TextField(
-                        controller: websocketUrlController,
-                        decoration: InputDecoration(
-                          hintText: '例如：wss://example.com',
                           hintStyle: TextStyle(color: Colors.grey.shade400),
                           contentPadding: const EdgeInsets.symmetric(
                             horizontal: 16,
@@ -2338,71 +2672,16 @@ class _SettingsScreenState extends State<SettingsScreen>
                       '留空将根据设备ID自动生成',
                       style: TextStyle(color: Colors.grey, fontSize: 12),
                     ),
-                    const SizedBox(height: 16),
-                    Row(
-                      mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                      children: [
-                        const Text(
-                          'Token',
-                          style: TextStyle(
-                            fontSize: 16,
-                            fontWeight: FontWeight.w600,
-                          ),
-                        ),
-                        Container(
-                          padding: const EdgeInsets.symmetric(
-                            horizontal: 8,
-                            vertical: 4,
-                          ),
-                          decoration: BoxDecoration(
-                            color: Colors.grey.shade100,
-                            borderRadius: BorderRadius.circular(8),
-                          ),
-                          child: const Text(
-                            '默认开启',
-                            style: TextStyle(color: Colors.grey, fontSize: 14),
-                          ),
-                        ),
-                      ],
-                    ),
-                    const SizedBox(height: 8),
-                    Container(
-                      decoration: BoxDecoration(
-                        color: Colors.white,
-                        borderRadius: BorderRadius.circular(12),
-                        border: Border.all(color: Colors.grey.shade300),
-                        boxShadow: [
-                          BoxShadow(
-                            color: Colors.black.withOpacity(0.03),
-                            blurRadius: 4,
-                            spreadRadius: 0,
-                            offset: const Offset(0, 2),
-                          ),
-                        ],
-                      ),
-                      child: TextField(
-                        controller: tokenController,
-                        decoration: const InputDecoration(
-                          contentPadding: EdgeInsets.symmetric(
-                            horizontal: 16,
-                            vertical: 14,
-                          ),
-                          border: InputBorder.none,
-                        ),
-                      ),
-                    ),
                     const SizedBox(height: 24),
                     ElevatedButton(
                       onPressed: () {
                         final name = nameController.text.trim();
-                        final websocketUrl = websocketUrlController.text.trim();
                         final macAddress = macAddressController.text.trim();
-                        final token = tokenController.text.trim();
 
-                        if (name.isEmpty || websocketUrl.isEmpty) {
+                        if (name.isEmpty) {
                           ScaffoldMessenger.of(context).showSnackBar(
                             SnackBar(
-                              content: const Text('请填写所有必填字段'),
+                              content: const Text('请填写服务名称'),
                               backgroundColor: Colors.red.shade600,
                               behavior: SnackBarBehavior.floating,
                               shape: RoundedRectangleBorder(
@@ -2419,7 +2698,6 @@ class _SettingsScreenState extends State<SettingsScreen>
                           listen: false,
                         ).addXiaozhiConfig(
                           name,
-                          websocketUrl,
                           customMacAddress:
                               macAddress.isNotEmpty ? macAddress : null,
                         );
@@ -2484,11 +2762,7 @@ class _SettingsScreenState extends State<SettingsScreen>
 
   void _showEditXiaozhiConfigDialog(XiaozhiConfig config) {
     final nameController = TextEditingController(text: config.name);
-    final websocketUrlController = TextEditingController(
-      text: config.websocketUrl,
-    );
     final macAddressController = TextEditingController(text: config.macAddress);
-    final tokenController = TextEditingController(text: config.token);
 
     showDialog(
       context: context,
@@ -2537,7 +2811,7 @@ class _SettingsScreenState extends State<SettingsScreen>
                     ),
                     const SizedBox(height: 8),
                     const Text(
-                      '修改小智语音服务配置',
+                      '修改小智语音服务配置（连接信息通过 OTA 自动获取）',
                       style: TextStyle(color: Colors.grey, fontSize: 14),
                     ),
                     const SizedBox(height: 24),
@@ -2567,42 +2841,6 @@ class _SettingsScreenState extends State<SettingsScreen>
                         controller: nameController,
                         decoration: InputDecoration(
                           hintText: '例如：家庭小智',
-                          hintStyle: TextStyle(color: Colors.grey.shade400),
-                          contentPadding: const EdgeInsets.symmetric(
-                            horizontal: 16,
-                            vertical: 14,
-                          ),
-                          border: InputBorder.none,
-                        ),
-                      ),
-                    ),
-                    const SizedBox(height: 16),
-                    const Text(
-                      'WebSocket地址',
-                      style: TextStyle(
-                        fontSize: 16,
-                        fontWeight: FontWeight.w600,
-                      ),
-                    ),
-                    const SizedBox(height: 8),
-                    Container(
-                      decoration: BoxDecoration(
-                        color: Colors.white,
-                        borderRadius: BorderRadius.circular(12),
-                        border: Border.all(color: Colors.grey.shade300),
-                        boxShadow: [
-                          BoxShadow(
-                            color: Colors.black.withOpacity(0.03),
-                            blurRadius: 4,
-                            spreadRadius: 0,
-                            offset: const Offset(0, 2),
-                          ),
-                        ],
-                      ),
-                      child: TextField(
-                        controller: websocketUrlController,
-                        decoration: InputDecoration(
-                          hintText: '例如：wss://example.com',
                           hintStyle: TextStyle(color: Colors.grey.shade400),
                           contentPadding: const EdgeInsets.symmetric(
                             horizontal: 16,
@@ -2646,71 +2884,16 @@ class _SettingsScreenState extends State<SettingsScreen>
                       '留空将根据设备ID自动生成',
                       style: TextStyle(color: Colors.grey, fontSize: 12),
                     ),
-                    const SizedBox(height: 16),
-                    Row(
-                      mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                      children: [
-                        const Text(
-                          'Token',
-                          style: TextStyle(
-                            fontSize: 16,
-                            fontWeight: FontWeight.w600,
-                          ),
-                        ),
-                        Container(
-                          padding: const EdgeInsets.symmetric(
-                            horizontal: 8,
-                            vertical: 4,
-                          ),
-                          decoration: BoxDecoration(
-                            color: Colors.grey.shade100,
-                            borderRadius: BorderRadius.circular(8),
-                          ),
-                          child: const Text(
-                            '默认开启',
-                            style: TextStyle(color: Colors.grey, fontSize: 14),
-                          ),
-                        ),
-                      ],
-                    ),
-                    const SizedBox(height: 8),
-                    Container(
-                      decoration: BoxDecoration(
-                        color: Colors.white,
-                        borderRadius: BorderRadius.circular(12),
-                        border: Border.all(color: Colors.grey.shade300),
-                        boxShadow: [
-                          BoxShadow(
-                            color: Colors.black.withOpacity(0.03),
-                            blurRadius: 4,
-                            spreadRadius: 0,
-                            offset: const Offset(0, 2),
-                          ),
-                        ],
-                      ),
-                      child: TextField(
-                        controller: tokenController,
-                        decoration: const InputDecoration(
-                          contentPadding: EdgeInsets.symmetric(
-                            horizontal: 16,
-                            vertical: 14,
-                          ),
-                          border: InputBorder.none,
-                        ),
-                      ),
-                    ),
                     const SizedBox(height: 24),
                     ElevatedButton(
                       onPressed: () {
                         final name = nameController.text.trim();
-                        final websocketUrl = websocketUrlController.text.trim();
                         final macAddress = macAddressController.text.trim();
-                        final token = tokenController.text.trim();
 
-                        if (name.isEmpty || websocketUrl.isEmpty) {
+                        if (name.isEmpty) {
                           ScaffoldMessenger.of(context).showSnackBar(
                             SnackBar(
-                              content: const Text('请填写所有必填字段'),
+                              content: const Text('请填写服务名称'),
                               backgroundColor: Colors.red.shade600,
                               behavior: SnackBarBehavior.floating,
                               shape: RoundedRectangleBorder(
@@ -2724,12 +2907,10 @@ class _SettingsScreenState extends State<SettingsScreen>
 
                         final updatedConfig = config.copyWith(
                           name: name,
-                          websocketUrl: websocketUrl,
                           macAddress:
                               macAddress.isNotEmpty
                                   ? macAddress
                                   : config.macAddress,
-                          token: token.isNotEmpty ? token : config.token,
                         );
 
                         Provider.of<ConfigProvider>(

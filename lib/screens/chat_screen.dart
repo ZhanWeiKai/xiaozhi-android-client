@@ -14,6 +14,7 @@ import 'package:ai_assistant/providers/config_provider.dart';
 import 'package:ai_assistant/models/minimax_config.dart';
 import 'package:ai_assistant/services/dify_service.dart';
 import 'package:ai_assistant/services/xiaozhi_service.dart';
+import 'package:uuid/uuid.dart';
 import 'package:ai_assistant/services/minimax_service.dart';
 import 'package:ai_assistant/widgets/message_bubble.dart';
 import 'package:ai_assistant/screens/voice_call_screen.dart';
@@ -181,9 +182,16 @@ class _ChatScreenState extends State<ChatScreen> {
     );
 
     _xiaozhiService = XiaozhiService(
-      websocketUrl: xiaozhiConfig.websocketUrl,
       macAddress: xiaozhiConfig.macAddress,
-      token: xiaozhiConfig.token,
+      otaUrl: xiaozhiConfig.otaUrl?.isNotEmpty == true
+          ? xiaozhiConfig.otaUrl!
+          : ConfigProvider.OFFICIAL_OTA_URL,
+      clientId: xiaozhiConfig.clientId?.isNotEmpty == true
+          ? xiaozhiConfig.clientId!
+          : const Uuid().v4(),
+      wsUrl: xiaozhiConfig.websocketUrl?.isNotEmpty == true
+          ? xiaozhiConfig.websocketUrl!
+          : ConfigProvider.OFFICIAL_WS_URL,
     );
 
     // 添加消息监听器

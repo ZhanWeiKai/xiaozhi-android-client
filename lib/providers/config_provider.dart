@@ -91,20 +91,49 @@ class ConfigProvider extends ChangeNotifier {
     await prefs.setStringList('minimaxConfigs', minimaxConfigsJson);
   }
 
+  static const String OFFICIAL_WS_URL = 'wss://api.tenclass.net/xiaozhi/v1/';
+  static const String OFFICIAL_OTA_URL = 'https://api.tenclass.net/xiaozhi/ota/';
+
   Future<void> addXiaozhiConfig(
-    String name,
-    String websocketUrl, {
+    String name, {
     String? customMacAddress,
   }) async {
-    // 如果提供了自定义MAC地址，直接使用；否则使用设备ID生成
     final macAddress = customMacAddress ?? await _getDeviceMacAddress();
+    final clientId = const Uuid().v4();
 
     final newConfig = XiaozhiConfig(
       id: DateTime.now().millisecondsSinceEpoch.toString(),
       name: name,
-      websocketUrl: websocketUrl,
+      websocketUrl: OFFICIAL_WS_URL,
       macAddress: macAddress,
-      token: 'test-token',
+      token: '',
+      configType: 'official',
+      otaUrl: OFFICIAL_OTA_URL,
+      clientId: clientId,
+    );
+
+    _xiaozhiConfigs.add(newConfig);
+    await _saveConfigs();
+    notifyListeners();
+  }
+
+  /// 添加自定义 xiaozhi-server 配置（OTA 方式）
+  Future<void> addCustomXiaozhiConfig(
+    String name,
+    String otaUrl,
+  ) async {
+    final macAddress = await _getDeviceMacAddress();
+    final clientId = const Uuid().v4();
+
+    final newConfig = XiaozhiConfig(
+      id: DateTime.now().millisecondsSinceEpoch.toString(),
+      name: name,
+      websocketUrl: '',
+      macAddress: macAddress,
+      token: '',
+      configType: 'custom',
+      otaUrl: otaUrl,
+      clientId: clientId,
     );
 
     _xiaozhiConfigs.add(newConfig);

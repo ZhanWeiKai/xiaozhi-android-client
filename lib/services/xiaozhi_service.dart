@@ -44,9 +44,10 @@ class XiaozhiService {
   // 单例实例
   static XiaozhiService? _instance;
 
-  final String websocketUrl;
   final String macAddress;
-  final String token;
+  final String otaUrl;
+  final String clientId;
+  final String wsUrl;
   String? _sessionId; // 会话ID将由服务器提供
 
   XiaozhiWebSocketManager? _webSocketManager;
@@ -61,15 +62,17 @@ class XiaozhiService {
 
   /// 工厂构造函数，实现单例模式
   factory XiaozhiService({
-    required String websocketUrl,
     required String macAddress,
-    required String token,
+    required String otaUrl,
+    required String clientId,
+    required String wsUrl,
     String? sessionId,
   }) {
     _instance ??= XiaozhiService._internal(
-      websocketUrl: websocketUrl,
       macAddress: macAddress,
-      token: token,
+      otaUrl: otaUrl,
+      clientId: clientId,
+      wsUrl: wsUrl,
       sessionId: sessionId,
     );
     return _instance!;
@@ -77,9 +80,10 @@ class XiaozhiService {
 
   /// 内部构造函数
   XiaozhiService._internal({
-    required this.websocketUrl,
     required this.macAddress,
-    required this.token,
+    required this.otaUrl,
+    required this.clientId,
+    required this.wsUrl,
     String? sessionId,
   }) {
     _sessionId = sessionId;
@@ -135,12 +139,14 @@ class XiaozhiService {
   /// 初始化
   Future<void> _init() async {
     // 使用配置中的MAC地址作为设备ID
-    print('$TAG: 初始化完成，使用MAC地址作为设备ID: $macAddress');
+    print('[connect-xiaozhi] XiaozhiService 初始化: macAddress=$macAddress, otaUrl=$otaUrl, clientId=$clientId, wsUrl=$wsUrl');
 
-    // 初始化WebSocket管理器，启用 token
+    // 初始化WebSocket管理器
     _webSocketManager = XiaozhiWebSocketManager(
       deviceId: macAddress,
-      enableToken: true,
+      otaUrl: otaUrl,
+      clientId: clientId,
+      wsUrl: wsUrl,
     );
 
     // 添加WebSocket事件监听
@@ -185,14 +191,16 @@ class XiaozhiService {
       // 创建WebSocket管理器
       _webSocketManager = XiaozhiWebSocketManager(
         deviceId: macAddress,
-        enableToken: true,
+        otaUrl: otaUrl,
+        clientId: clientId,
+        wsUrl: wsUrl,
       );
 
       // 添加WebSocket事件监听
       _webSocketManager!.addListener(_onWebSocketEvent);
 
       // 连接WebSocket
-      await _webSocketManager!.connect(websocketUrl, token);
+      await _webSocketManager!.connect();
     } catch (e) {
       print('$TAG: 连接失败: $e');
       _dispatchEvent(
@@ -313,18 +321,19 @@ class XiaozhiService {
       await AudioUtil.initRecorder();
       await AudioUtil.initPlayer();
 
-      print('$TAG: 正在连接 $websocketUrl');
+      print('$TAG: 正在连接 OTA: $otaUrl');
       print('$TAG: 设备ID: $macAddress');
-      print('$TAG: Token启用: true');
-      print('$TAG: 使用Token: $token');
+      print('$TAG: Client-ID: $clientId');
 
-      // 使用 WebSocketManager 连接
+      // 使用 WebSocketManager 连接（wsUrl 与 WebUI 一致，从配置中 hardcode）
       _webSocketManager = XiaozhiWebSocketManager(
         deviceId: macAddress,
-        enableToken: true,
+        otaUrl: otaUrl,
+        clientId: clientId,
+        wsUrl: wsUrl,
       );
       _webSocketManager!.addListener(_onWebSocketEvent);
-      await _webSocketManager!.connect(websocketUrl, token);
+      await _webSocketManager!.connect();
     } catch (e) {
       print('$TAG: 连接失败: $e');
       rethrow;

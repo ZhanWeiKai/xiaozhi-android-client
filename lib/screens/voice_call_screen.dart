@@ -6,6 +6,8 @@ import 'package:ai_assistant/models/message.dart';
 import 'package:ai_assistant/models/xiaozhi_config.dart';
 import 'package:ai_assistant/providers/conversation_provider.dart';
 import 'package:ai_assistant/services/xiaozhi_service.dart';
+import 'package:ai_assistant/providers/config_provider.dart';
+import 'package:uuid/uuid.dart';
 import 'dart:async';
 import 'dart:io';
 
@@ -74,9 +76,16 @@ class _VoiceCallScreenState extends State<VoiceCallScreen>
 
     // 获取XiaozhiService实例
     _xiaozhiService = XiaozhiService(
-      websocketUrl: widget.xiaozhiConfig.websocketUrl,
       macAddress: widget.xiaozhiConfig.macAddress,
-      token: widget.xiaozhiConfig.token,
+      otaUrl: widget.xiaozhiConfig.otaUrl?.isNotEmpty == true
+          ? widget.xiaozhiConfig.otaUrl!
+          : ConfigProvider.OFFICIAL_OTA_URL,
+      clientId: widget.xiaozhiConfig.clientId?.isNotEmpty == true
+          ? widget.xiaozhiConfig.clientId!
+          : const Uuid().v4(),
+      wsUrl: widget.xiaozhiConfig.websocketUrl?.isNotEmpty == true
+          ? widget.xiaozhiConfig.websocketUrl!
+          : ConfigProvider.OFFICIAL_WS_URL,
       sessionId: widget.conversation.id,
     );
 
