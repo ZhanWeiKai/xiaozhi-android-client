@@ -1,296 +1,273 @@
-# Android 客户端新增自定义 xiaozhi-server 连接方式
+# Android 客户端自定义 xiaozhi-server 连接 — 实现文档
 
-## 一、背景
-
-当前 Android 客户端连接小智服务的方式：
-- 用户手动填写：服务名称、WebSocket URL、MAC 地址、Token
-- 连接时通过 **HTTP headers** 传递 `device-id`、`client-id`、`Authorization`
-- 适配的是**官方 xiaozhi.me**
-
-自定义 xiaozhi-server 的连接方式：
-- 用户只需填写一个 **OTA URL**
-- 客户端调用 OTA 接口，自动获取 WebSocket URL、Token、Client ID
-- 连接时通过 **URL query params** 传递认证信息
-
-本次改动：**保留现有官方连接方式，新增自定义 server 连接方式**。
+> 参考源码: `C:\claude-project\xiaozhi-webui\xiaozhi-webui-4-9\xiaozhi-webui\websocket_proxy.py`
+> 参考文档: `C:\claude-project\xiaozhi-webui\xiaozhi-webui-4-9\xiaozhi-webui\docs\plans\xiaozhi-webui-summarize.md`
 
 ---
 
-## 二、两种连接方式对比
+## 一、两种连接模式的区别
 
-### 方式 A：官方 xiaozhi.me（现有流程，保留不变）
-
-```
-用户填写: 名称、WS URL、MAC 地址、Token
-    │
-    ▼
-连接 WebSocket (headers 传递认证)
-    │
-    ▼
-发送 hello 消息 → 开始对话
-```
-
-### 方式 B：自定义 xiaozhi-server（新增）
+### 官方 xiaozhi.me (`configType == "official"`)
 
 ```
-用户填写: 名称、OTA URL（如 https://xiaozhi-wstest.jamesweb.org/xiaozhi/ota/）
+OTA 注册 (headers: Device-Id + Client-Id)
     │
     ▼
-客户端自动生成 DEVICE_ID（MAC）、CLIENT_ID（UUID）
+获取 Token (仅 token，不使用 wsUrl)
     │
     ▼
-POST OTA 接口
-  Headers: Device-Id=<MAC>, Client-Id=<UUID>
-  Body: 设备信息 JSON
+WebSocket 连接 (hardcoded WS_URL)
+  认证方式: HTTP headers
+    Device-Id: <MAC>
+    Client-Id: <UUID>
+    Protocol-Version: 1
+    Authorization: Bearer <token>
     │
     ▼
-OTA 返回: { "websocket": { "url": "wss://...", "token": "OTA_TOKEN" } }
-    │
-    ▼
-拼接 WebSocket URL (query params 传递认证):
-  wss://.../xiaozhi/v1?authorization=Bearer <OTA_TOKEN>&device-id=<MAC>&client-id=<UUID>
-    │
-    ▼
-发送 hello 消息 → 开始对话
+发送 hello (简单格式，仅 version + audio_params)
 ```
+
+### 自定义 xiaozhi-server (`configType == "custom"`)
+
+```
+OTA 注册 (headers: Device-Id + Client-Id)
+    │
+    ▼
+获取 websocket.url + websocket.token
+    │
+    ▼
+WebSocket 连接 (URL 从 OTA 获取)
+  认证方式: URL query params
+    wss://server/xiaozhi/v1?authorization=Bearer <OTA_TOKEN>&device-id=<MAC>&client-id=<UUID>
+    │
+    ▼
+发送 hello (包含认证信息)
+    device_id: <MAC>
+    device_name: "xiaozhi-android"
+    device_mac: <MAC>
+    token: <OTA_TOKEN>
+```
+
+### 关键差异总结
+
+| 项目 | 官方模式 | 自定义模式 |
+|------|---------|-----------|
+| WS_URL 来源 | 硬编码 (`wss://api.tenclass.net/xiaozhi/v1/`) | OTA 返回的 `websocket.url` |
+| WebSocket 认证方式 | HTTP headers | URL query params |
+| hello 消息 | 简单格式 (version + audio_params) | 包含 device_id, device_name, device_mac, token |
+| Token 用途 | headers Authorization | query params + hello body |
 
 ---
 
-## 三、UI 交互改动
+## 二、认证机制详解（自定义 server）
 
-### 改动位置
-
-`lib/screens/settings_screen.dart` 中的 `_showAddXiaozhiConfigDialog()` 方法
-
-### 现有流程
+自定义 xiaozhi-server 使用 HMAC-SHA256 签名的 Token 进行认证：
 
 ```
-点击"添加服务" → 直接弹出填写表单（名称、WS URL、MAC、Token）
+┌──────────────────────────────────────────────────────┐
+│                  唯一 Token（OTA Token）               │
+│                                                      │
+│  生成方: xiaozhi-server OTA 接口 (ota_handler.py)     │
+│  算法:   HMAC-SHA256(auth_key, "client_id|device_id|ts") │
+│  传递:   URL query params → authorization=Bearer <token> │
+│  校验:   websocket_server._handle_auth()              │
+│  验证参数: verify_token(token, client_id, device_id)   │
+│  有效期:  30 天                                        │
+└──────────────────────────────────────────────────────┘
 ```
 
-### 改为
-
-```
-点击"添加服务" → 弹出选择窗口
-                    │
-        ┌───────────┴───────────┐
-        ▼                       ▼
-  自定义 Server            官方 xiaozhi.me
-  [选择此方式]             [选择此方式]
-        │                       │
-        ▼                       ▼
-  填写: 服务名称            填写: 服务名称
-  填写: OTA URL             填写: WebSocket URL
-  (其他全自动)              填写: MAC 地址
-                             填写: Token
-```
-
-### 编辑配置时
-
-编辑时根据配置类型（`configType` 字段）决定显示哪个表单：
-- `official` → 显示现有表单（WS URL、MAC、Token）
-- `custom` → 显示自定义表单（OTA URL，其他只读展示）
+**注意**: xiaozhi-server 只通过 URL query params 中的 `authorization`、`device-id`、`client-id` 进行认证。
+HTTP headers 中的认证信息对自定义 server **无效**。
 
 ---
 
-## 四、数据模型改动
+## 三、代码实现
 
-### 修改文件：`lib/models/xiaozhi_config.dart`
+### 3.1 `xiaozhi_websocket_manager.dart` — 核心连接逻辑
 
-新增字段 `configType`（区分连接方式）和 `otaUrl`、`clientId`：
+新增 `configType` 参数区分两种模式：
 
 ```dart
-class XiaozhiConfig {
-  final String id;
-  final String name;
-  final String websocketUrl;
-  final String macAddress;
-  final String token;
-  final String configType;   // 【新增】"official" 或 "custom"
-  final String? otaUrl;      // 【新增】自定义 server 的 OTA 地址
-  final String? clientId;    // 【新增】自定义 server 的 CLIENT_ID (UUID)
-  // ...
+class XiaozhiWebSocketManager {
+  String _configType; // "official" 或 "custom"
+
+  XiaozhiWebSocketManager({
+    required String deviceId,
+    required String otaUrl,
+    required String clientId,
+    required String wsUrl,
+    String configType = 'official',  // 新增
+  });
 }
 ```
 
-- `configType == "official"`：现有流程，字段含义不变
-- `configType == "custom"`：OTA 流程
-  - `otaUrl`：用户填写的 OTA 地址
-  - `websocketUrl`：从 OTA 返回自动获取
-  - `token`：从 OTA 返回自动获取
-  - `macAddress`：客户端自动生成（MAC 格式）
-  - `clientId`：客户端自动生成（UUID 格式）
+#### `_registerDevice()` — OTA 注册
 
-### 向后兼容
+与官方 WebUI 的 `_update_ota_address()` 保持一致：
+- POST OTA URL
+- Headers: `Device-Id`, `Client-Id`, `Content-Type`
+- Body: 设备信息 JSON（与 WebUI 完全相同的 payload）
+- 返回: `{ 'token': String, 'wsUrl'?: String }`
+  - 官方模式: 只用 token
+  - 自定义模式: 用 token + wsUrl
 
-旧配置没有 `configType` 字段，`fromJson` 中默认为 `"official"`，不影响已有用户数据。
+#### `connect()` — 双模式连接
 
----
-
-## 五、需要改动的文件清单
-
-### 1. `lib/models/xiaozhi_config.dart` — 【修改】
-
-**改动内容：**
-- 新增 `configType` 字段（String，默认 `"official"`）
-- 新增 `otaUrl` 字段（String?，可选）
-- 新增 `clientId` 字段（String?，可选）
-- `fromJson`：读取新字段，`configType` 缺省为 `"official"`
-- `toJson`：序列化新字段
-- `copyWith`：支持新字段的拷贝
-
----
-
-### 2. `lib/providers/config_provider.dart` — 【修改】
-
-**改动内容：**
-- `addXiaozhiConfig()` 方法签名不变，但增加可选参数 `configType`、`otaUrl`
-- 新增 `addCustomXiaozhiConfig(String name, String otaUrl)` 方法
-  - 自动生成 `macAddress`（MAC 格式）
-  - 自动生成 `clientId`（UUID 格式）
-  - `configType` 设为 `"custom"`
-  - `websocketUrl` 和 `token` 初始为空字符串（后续连接时通过 OTA 填充）
-
----
-
-### 3. `lib/services/xiaozhi_websocket_manager.dart` — 【修改】
-
-**改动内容：**
-
-#### 3.1 `connect()` 方法
-- 新增 `configType` 参数
-- 当 `configType == "custom"` 时：
-  - 先调用 `_fetchOtaToken()` 获取 WebSocket URL 和 Token
-  - 然后用 URL params 方式连接（不传 headers）
-- 当 `configType == "official"` 时：
-  - 保持现有逻辑不变（HTTP headers 方式）
-
-#### 3.2 新增 `_fetchOtaToken()` 方法
-```
-输入: otaUrl, deviceId(MAC), clientId(UUID)
-流程:
-  1. POST $otaUrl
-     Headers: { "Device-Id": deviceId, "Client-Id": clientId, "Content-Type": "application/json" }
-     Body: { "device_id": deviceId, "device_name": "Android客户端" }
-  2. 解析返回 JSON:
-     websocket.url → wsUrl
-     websocket.token → token
-  3. 返回 (wsUrl, token)
-```
-
-#### 3.3 新增 `_buildWebSocketUrl()` 方法
-```
-输入: baseUrl, token, deviceId, clientId
-输出: baseUrl?authorization=Bearer <token>&device-id=<deviceId>&client-id=<clientId>
-```
-
-#### 3.4 修改连接逻辑
-当 `configType == "custom"` 时：
 ```dart
-// 不再传 headers，改为拼 URL params
-final wsUrl = _buildWebSocketUrl(wsBaseUrl, token, deviceId, clientId);
-_channel = IOWebSocketChannel.connect(Uri.parse(wsUrl));
+Future<void> connect() async {
+  // 1. OTA 注册
+  final otaResult = await _registerDevice();
+
+  if (_configType == 'custom') {
+    // 自定义模式: WS_URL 从 OTA 获取，query params 认证
+    _wsUrl = otaResult['wsUrl'];
+    final fullUrl = _buildAuthUrl(_wsUrl, token, deviceId, clientId);
+    _channel = IOWebSocketChannel.connect(Uri.parse(fullUrl));
+  } else {
+    // 官方模式: WS_URL 硬编码，headers 认证
+    final headers = {
+      'Device-Id': deviceId,
+      'Client-Id': clientId,
+      'Protocol-Version': '1',
+      'Authorization': 'Bearer $token',
+    };
+    _channel = IOWebSocketChannel.connect(Uri.parse(_wsUrl), headers: headers);
+  }
+
+  // 发送 hello（两种模式内容不同）
+  _sendHelloMessage();
+}
+```
+
+#### `_buildAuthUrl()` — 构建 URL（新增）
+
+与 WebUI 的 `_build_ws_url()` 一致：
+```dart
+String _buildAuthUrl(String baseUrl, String token, String deviceId, String clientId) {
+  final separator = baseUrl.contains('?') ? '&' : '?';
+  return '$baseUrl${separator}authorization=Bearer%20$token&device-id=$deviceId&client-id=$clientId';
+}
+```
+
+#### `_sendHelloMessage()` — 双模式 hello
+
+```dart
+void _sendHelloMessage() {
+  if (_configType == 'custom') {
+    // 自定义 server: 包含认证信息（与 WebUI handle_client_messages 注入逻辑一致）
+    hello = {
+      "type": "hello",
+      "version": 3,
+      "audio_params": { ... },
+      "device_id": _deviceId,
+      "device_name": "xiaozhi-android",
+      "device_mac": _deviceId,
+      "token": _token,
+    };
+  } else {
+    // 官方: 简单格式
+    hello = {
+      "type": "hello",
+      "version": 3,
+      "audio_params": { ... },
+    };
+  }
+}
+```
+
+### 3.2 `xiaozhi_service.dart` — 传递 configType
+
+```dart
+class XiaozhiService {
+  final String configType; // 新增字段
+
+  factory XiaozhiService({
+    required String macAddress,
+    required String otaUrl,
+    required String clientId,
+    required String wsUrl,
+    String configType = 'official',  // 新增参数
+    String? sessionId,
+  });
+}
+```
+
+所有创建 `XiaozhiWebSocketManager` 的地方都传入 `configType`。
+
+### 3.3 `chat_screen.dart` / `voice_call_screen.dart` — 传入 configType
+
+```dart
+_xiaozhiService = XiaozhiService(
+  macAddress: xiaozhiConfig.macAddress,
+  otaUrl: ...,
+  clientId: ...,
+  wsUrl: ...,
+  configType: xiaozhiConfig.configType,  // 新增
+);
 ```
 
 ---
 
-### 4. `lib/services/xiaozhi_service.dart` — 【修改】
+## 四、数据流完整图示
 
-**改动内容：**
-
-#### 4.1 `XiaozhiService` 类
-- 新增 `configType` 字段（String）
-- 新增 `otaUrl` 字段（String?）
-- 新增 `clientId` 字段（String?）
-- 工厂构造函数和内部构造函数增加对应参数
-
-#### 4.2 `connect()` 方法
-- 将 `configType` 传递给 `_webSocketManager.connect()`
-
----
-
-### 5. `lib/screens/settings_screen.dart` — 【修改】
-
-**改动内容：**
-
-#### 5.1 新增 `_showAddServiceTypeDialog()` 方法
-弹出选择窗口，两个选项卡片：
-- "自定义 xiaozhi-server"：描述 + 图标，点击后调用 `_showAddCustomXiaozhiConfigDialog()`
-- "官方 xiaozhi.me"：描述 + 图标，点击后调用现有的 `_showAddXiaozhiConfigDialog()`
-
-#### 5.2 新增 `_showAddCustomXiaozhiConfigDialog()` 方法
-配置表单，只需填写：
-- 服务名称（必填）
-- OTA URL（必填，带 hint 提示格式）
-- 其他说明文字："连接时会自动获取 WebSocket 地址和认证信息"
-
-#### 5.3 修改"添加服务"按钮
-原来直接调用 `_showAddXiaozhiConfigDialog()`，改为调用 `_showAddServiceTypeDialog()`
-
-#### 5.4 修改 `_showEditXiaozhiConfigDialog()` 方法
-根据 `config.configType`：
-- `"custom"` → 显示自定义编辑表单（OTA URL 可修改，WS URL/Token 只读展示）
-- `"official"` → 显示现有编辑表单
-
-#### 5.5 配置列表项显示
-- 自定义类型：显示 OTA URL
-- 官方类型：显示 WebSocket URL
-
----
-
-### 6. `lib/screens/chat_screen.dart` — 【修改】
-
-**改动内容：**
-- 创建 `XiaozhiService` 时传入 `configType`、`otaUrl`、`clientId` 参数
-
----
-
-### 7. `lib/screens/voice_call_screen.dart` — 【修改】
-
-**改动内容：**
-- 创建 `XiaozhiService` 时传入 `configType`、`otaUrl`、`clientId` 参数
-
----
-
-## 六、自定义 server 连接完整流程图
+### 自定义 Server 连接流程
 
 ```
 用户操作:
-  1. 设置页面 → 小智服务 Tab → 点击"添加服务"
-  2. 弹出选择窗口 → 点击"自定义 xiaozhi-server"
-  3. 填写: 名称="我的小智", OTA URL="https://xiaozhi-wstest.jamesweb.org/xiaozhi/ota/"
-  4. 点击"添加"
+  1. 设置页面 → 小智服务 → "添加服务" → "自定义 xiaozhi-server"
+  2. 填写: 名称, OTA URL (如 https://xiaozhi.jamesweb.org/api/ota/)
+  3. 点击"添加"
 
-客户端处理:
-  5. addCustomXiaozhiConfig(name, otaUrl)
-     - 自动生成 macAddress (MAC格式)
-     - 自动生成 clientId (UUID格式)
+保存配置:
+  4. addCustomXiaozhiConfig(name, otaUrl)
      - configType = "custom"
-     - 保存到 SharedPreferences
+     - 自动生成 macAddress (MAC格式), clientId (UUID格式)
+     - websocketUrl = "" (后续由 OTA 填充)
+     - token = ""
 
-连接时:
-  6. 用户选择该服务 → 进入聊天
-  7. XiaozhiService.connect()
-     → WebSocketManager.connect(url, token, configType: "custom", otaUrl, clientId, deviceId)
+连接流程:
+  5. 用户选择该服务 → 进入聊天
+  6. XiaozhiService(configType: "custom")
+  7. WebSocketManager(configType: "custom").connect()
 
-  8. WebSocketManager 检测 configType == "custom":
-     8.1 _fetchOtaToken(otaUrl, deviceId, clientId)
-         → POST OTA
-         → 返回 (wsUrl, otaToken)
-     8.2 _buildWebSocketUrl(wsUrl, otaToken, deviceId, clientId)
-         → wss://...?authorization=Bearer <token>&device-id=<MAC>&client-id=<UUID>
-     8.3 IOWebSocketChannel.connect(拼接后的URL)  ← 不传 headers
-     8.4 发送 hello 消息（与现有流程一致）
+  8. _registerDevice()
+     POST otaUrl
+       Headers: Device-Id=<MAC>, Client-Id=<UUID>
+       Body: { mac_address, uuid, chip_info, ... }
+     ← 返回: { websocket: { url: "wss://...", token: "..." } }
 
-  9. 连接成功 → 开始对话
+  9. _buildAuthUrl()
+     → wss://server/xiaozhi/v1?authorization=Bearer <token>&device-id=<MAC>&client-id=<UUID>
+
+  10. IOWebSocketChannel.connect(fullUrl)  ← 无 headers
+
+  11. _sendHelloMessage() (custom 格式)
+      { type: "hello", device_id, device_name, device_mac, token, audio_params }
+
+  12. 服务端 verify_token(token, client_id, device_id) → 认证通过
+  13. 双向通信开始
 ```
 
 ---
 
-## 七、注意事项
+## 五、注意事项
 
-1. **OTA Token 有效期**：服务端 token 有效期 30 天，连接时如果 token 过期需要重新调用 OTA 获取
-2. **断线重连**：自定义 server 重连时需要重新调 OTA 获取新 token
-3. **内网地址替换**：OTA 返回的 URL 可能是内网地址（如 `ws://10.88.1.x:8000`），客户端需要判断是否可达，不可达时替换为外网地址
-4. **向后兼容**：旧的 `configType` 为 `"official"` 的配置完全不受影响
-5. **OTA 请求 body**：参考 xiaozhi-test 的实现，body 传设备信息即可，具体字段待 OTA 接口联调确认
+1. **OTA URL 格式**: 必须包含完整路径（含尾部斜杠），如 `https://xiaozhi.jamesweb.org/api/ota/`，否则可能返回 301
+2. **内网地址**: OTA 返回的 URL 可能是内网地址（如 `ws://10.88.1.x:8000`），客户端需要判断可达性
+3. **Token 有效期**: 自定义 server token 有效期 30 天，断线重连时需重新调 OTA
+4. **向后兼容**: 旧配置无 `configType` 字段，`fromJson` 默认为 `"official"`，不影响已有用户
+5. **单例重置**: 切换服务时必须调用 `XiaozhiService.resetInstance()` 避免复用旧配置
+
+---
+
+## 六、已完成的改动文件清单
+
+| 文件 | 改动 |
+|------|------|
+| `lib/models/xiaozhi_config.dart` | 新增 `configType`, `otaUrl`, `clientId` 字段 |
+| `lib/providers/config_provider.dart` | 新增 `addCustomXiaozhiConfig()`, 硬编码 URL 常量 |
+| `lib/services/xiaozhi_websocket_manager.dart` | 双模式连接：configType 区分官方/自定义，_buildAuthUrl，双模式 hello |
+| `lib/services/xiaozhi_service.dart` | 新增 configType 字段，传递到 WebSocketManager |
+| `lib/screens/chat_screen.dart` | 创建服务时传入 configType |
+| `lib/screens/voice_call_screen.dart` | 创建服务时传入 configType |
+| `lib/screens/settings_screen.dart` | UI：添加官方/自定义选择，自定义只填 OTA URL |

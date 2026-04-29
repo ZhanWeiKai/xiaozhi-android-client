@@ -31,23 +31,28 @@ class XiaozhiWebSocketManager {
   String? _token;
   String? _otaUrl;
   String? _clientId;
+  String _configType; // "official" 或 "custom"
 
   final List<XiaozhiWebSocketListener> _listeners = [];
   bool _isReconnecting = false;
   Timer? _reconnectTimer;
   StreamSubscription? _streamSubscription;
 
-  /// 构造函数（与官方 WebUI 保持一致：wsUrl 和 otaUrl 都是从配置中 hardcode 的）
+  /// 构造函数
+  /// configType: "official" = 官方 xiaozhi.me (hardcoded WS_URL + headers auth)
+  ///             "custom" = 自定义 server (WS_URL from OTA + query params auth)
   XiaozhiWebSocketManager({
     required String deviceId,
     required String otaUrl,
     required String clientId,
     required String wsUrl,
+    String configType = 'official',
   }) : _deviceId = deviceId,
       _otaUrl = otaUrl,
       _clientId = clientId,
-      _wsUrl = wsUrl {
-    print('[connect-xiaozhi] WebSocketManager 创建: wsUrl=$wsUrl, otaUrl=$otaUrl, deviceId=$deviceId, clientId=$clientId');
+      _wsUrl = wsUrl,
+      _configType = configType {
+    print('[connect-xiaozhi] WebSocketManager 创建: configType=$configType, wsUrl=$wsUrl, otaUrl=$otaUrl, deviceId=$deviceId, clientId=$clientId');
   }
 
   /// 添加事件监听器
@@ -69,9 +74,10 @@ class XiaozhiWebSocketManager {
     }
   }
 
-  /// 调用 OTA 接口注册设备并获取 Token（与官方 WebUI _update_ota_address 一致）
-  Future<String> _registerDevice() async {
-    print('[connect-xiaozhi] 【步骤1】开始 OTA 注册设备...');
+  /// 调用 OTA 接口注册设备并获取 Token 和 WebSocket URL（与官方 WebUI _update_ota_address 一致）
+  /// 返回 Map 包含 'token' 和可选的 'wsUrl'（自定义 server 从 OTA 获取）
+  Future<Map<String, String>> _registerDevice() async {
+    print('[connect-xiaozhi] 【步骤1】开始 OTA 注册设备... (configType=$_configType)');
     print('[connect-xiaozhi] OTA URL: $_otaUrl');
     print('[connect-xiaozhi] Device-Id: $_deviceId');
     print('[connect-xiaozhi] Client-Id: $_clientId');
@@ -79,8 +85,14 @@ class XiaozhiWebSocketManager {
     try {
       final uri = Uri.parse(_otaUrl!);
       final client = HttpClient();
+      // 自动跟随重定向（Python requests 默认跟随 301/302，Dart HttpClient 默认不跟随）
+      client.autoUncompress = true;
       final request = await client.postUrl(uri);
+      // 允许重定向（POST 请求遇到 301/302 时跟随跳转）
+      request.followRedirects = true;
+      request.maxRedirects = 5;
       request.headers.set('Device-Id', _deviceId!);
+      request.headers.set('Client-Id', _clientId!);
       request.headers.set('Content-Type', 'application/json');
       request.write(jsonEncode({
         'version': 2,
@@ -105,6 +117,7 @@ class XiaozhiWebSocketManager {
         'ota': {'label': 'factory'},
         'board': {
           'type': 'bread-compact-wifi',
+          'ip': '',
           'mac': _deviceId,
         },
       }));
@@ -123,7 +136,7 @@ class XiaozhiWebSocketManager {
 
       final data = jsonDecode(responseBody);
 
-      // 获取 websocket token（用于后续 WebSocket 认证）
+      // 获取 websocket 信息
       final websocket = data['websocket'];
       if (websocket == null) {
         print('[connect-xiaozhi] ✗ OTA 返回数据缺少 websocket 字段，响应 keys: ${data.keys.toList()}');
@@ -131,54 +144,81 @@ class XiaozhiWebSocketManager {
       }
 
       final token = websocket['token'] as String;
-      print('[connect-xiaozhi] ✓ OTA 注册成功，Token: ${token.length > 16 ? token.substring(0, 16) : token}...');
+      final otaWsUrl = websocket['url'] as String?;
 
-      return token;
+      print('[connect-xiaozhi] ✓ OTA 注册成功');
+      print('[connect-xiaozhi]   Token: ${token.length > 16 ? token.substring(0, 16) : token}...');
+      if (otaWsUrl != null && otaWsUrl.isNotEmpty) {
+        print('[connect-xiaozhi]   OTA WebSocket URL: $otaWsUrl');
+      }
+
+      return {
+        'token': token,
+        if (otaWsUrl != null && otaWsUrl.isNotEmpty) 'wsUrl': otaWsUrl,
+      };
     } catch (e) {
       print('[connect-xiaozhi] ✗ OTA 注册异常: $e');
       rethrow;
     }
   }
 
-  /// 连接到WebSocket服务器（与官方 WebUI 保持一致的流程）
+  /// 连接到WebSocket服务器（支持官方和自定义两种模式）
   Future<void> connect() async {
     try {
-      print('[connect-xiaozhi] ========== 开始连接流程 ==========');
+      print('[connect-xiaozhi] ========== 开始连接流程 (configType=$_configType) ==========');
       print('[connect-xiaozhi] WS URL: $_wsUrl');
       print('[connect-xiaozhi] OTA URL: $_otaUrl');
       print('[connect-xiaozhi] Device-Id: $_deviceId');
       print('[connect-xiaozhi] Client-Id: $_clientId');
 
-      // 1. 调用 OTA 注册设备并获取 Token（与 WebUI _update_ota_address 一致）
-      final token = await _registerDevice();
-      _token = token;
+      // 1. 调用 OTA 注册设备并获取 Token 和（可能有的）WebSocket URL
+      final otaResult = await _registerDevice();
+      _token = otaResult['token']!;
 
       // 2. 如果已连接，先断开
       if (_channel != null) {
         await disconnect();
       }
 
-      // 3. 构造 headers（与 WebUI additional_headers 一致）
-      final headers = <String, String>{
-        'Device-Id': _deviceId!,
-        'Client-Id': _clientId!,
-        'Protocol-Version': '1',
-        'Authorization': 'Bearer $token',
-      };
+      if (_configType == 'custom') {
+        // ===== 自定义 server 模式 =====
+        // WS_URL 从 OTA 响应获取，认证通过 URL query params 传递
+        final otaWsUrl = otaResult['wsUrl'];
+        if (otaWsUrl == null || otaWsUrl.isEmpty) {
+          throw Exception('自定义 server OTA 未返回 websocket.url');
+        }
+        _wsUrl = otaWsUrl;
 
-      print('[connect-xiaozhi] 【步骤2】开始连接 WebSocket...');
-      print('[connect-xiaozhi] 目标: $_wsUrl');
-      print('[connect-xiaozhi] Headers: Device-Id=$_deviceId, Client-Id=$_clientId, Protocol-Version=1, Authorization=Bearer ${token.length > 16 ? token.substring(0, 16) : token}...');
+        // 构建带认证参数的 URL（与 WebUI _build_ws_url 一致）
+        final fullUrl = _buildAuthUrl(_wsUrl!, _token!, _deviceId!, _clientId!);
 
-      // 4. 使用 IOWebSocketChannel 连接（认证信息通过 headers 传递，与 WebUI 一致）
-      _channel = IOWebSocketChannel.connect(
-        Uri.parse(_wsUrl!),
-        headers: headers,
-      );
+        print('[connect-xiaozhi] 【步骤2-custom】开始连接 WebSocket (query params 认证)...');
+        print('[connect-xiaozhi] 目标: $fullUrl');
+
+        _channel = IOWebSocketChannel.connect(Uri.parse(fullUrl));
+      } else {
+        // ===== 官方 xiaozhi.me 模式 =====
+        // WS_URL 硬编码，认证通过 headers 传递
+        final headers = <String, String>{
+          'Device-Id': _deviceId!,
+          'Client-Id': _clientId!,
+          'Protocol-Version': '1',
+          'Authorization': 'Bearer $_token',
+        };
+
+        print('[connect-xiaozhi] 【步骤2-official】开始连接 WebSocket (headers 认证)...');
+        print('[connect-xiaozhi] 目标: $_wsUrl');
+        print('[connect-xiaozhi] Headers: Device-Id=$_deviceId, Client-Id=$_clientId, Protocol-Version=1, Authorization=Bearer ${_token!.length > 16 ? _token!.substring(0, 16) : _token}...');
+
+        _channel = IOWebSocketChannel.connect(
+          Uri.parse(_wsUrl!),
+          headers: headers,
+        );
+      }
 
       print('[connect-xiaozhi] ✓ WebSocket 连接已建立');
 
-      // 5. 监听 WebSocket 事件
+      // 3. 监听 WebSocket 事件
       _streamSubscription = _channel!.stream.listen(
         _onMessage,
         onDone: _onDisconnected,
@@ -186,12 +226,12 @@ class XiaozhiWebSocketManager {
         cancelOnError: false,
       );
 
-      // 6. 连接成功
+      // 4. 连接成功
       _dispatchEvent(
         XiaozhiEvent(type: XiaozhiEventType.connected, data: null),
       );
 
-      // 7. 发送 hello 消息
+      // 5. 发送 hello 消息（官方和自定义的 hello 内容不同）
       Timer(const Duration(milliseconds: 200), () {
         _sendHelloMessage();
       });
@@ -201,6 +241,12 @@ class XiaozhiWebSocketManager {
         XiaozhiEvent(type: XiaozhiEventType.error, data: "连接失败: $e"),
       );
     }
+  }
+
+  /// 构建带认证参数的 WebSocket URL（自定义 server 使用，与 WebUI _build_ws_url 一致）
+  String _buildAuthUrl(String baseUrl, String token, String deviceId, String clientId) {
+    final separator = baseUrl.contains('?') ? '&' : '?';
+    return '$baseUrl${separator}authorization=Bearer%20$token&device-id=$deviceId&client-id=$clientId';
   }
 
   /// 断开WebSocket连接
@@ -218,19 +264,44 @@ class XiaozhiWebSocketManager {
     }
   }
 
-  /// 发送 Hello 消息（与官方 WebUI 保持一致）
+  /// 发送 Hello 消息
+  /// 官方模式: 简单 hello (version 3, audio_params)
+  /// 自定义模式: hello 包含 device_id, device_name, device_mac, token（与 WebUI handle_client_messages 一致）
   void _sendHelloMessage() {
-    final hello = {
-      "type": "hello",
-      "version": 3,
-      "audio_params": {
-        "format": "opus",
-        "sample_rate": 16000,
-        "channels": 1,
-        "frame_duration": 60,
-      },
-    };
-    print('[connect-xiaozhi] 【步骤3】发送 hello 消息: ${jsonEncode(hello)}');
+    Map<String, dynamic> hello;
+
+    if (_configType == 'custom') {
+      // 自定义 server hello：注入认证信息（与 WebUI handle_client_messages 中的注入逻辑一致）
+      hello = {
+        "type": "hello",
+        "version": 3,
+        "audio_params": {
+          "format": "opus",
+          "sample_rate": 16000,
+          "channels": 1,
+          "frame_duration": 60,
+        },
+        "device_id": _deviceId,
+        "device_name": "xiaozhi-android",
+        "device_mac": _deviceId,
+        "token": _token,
+      };
+      print('[connect-xiaozhi] 【步骤3-custom】发送 hello 消息 (含 device_id/device_mac/token): ${jsonEncode(hello)}');
+    } else {
+      // 官方 xiaozhi.me hello：简单格式
+      hello = {
+        "type": "hello",
+        "version": 3,
+        "audio_params": {
+          "format": "opus",
+          "sample_rate": 16000,
+          "channels": 1,
+          "frame_duration": 60,
+        },
+      };
+      print('[connect-xiaozhi] 【步骤3-official】发送 hello 消息: ${jsonEncode(hello)}');
+    }
+
     sendMessage(jsonEncode(hello));
   }
 

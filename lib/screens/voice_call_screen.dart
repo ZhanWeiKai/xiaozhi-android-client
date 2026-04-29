@@ -74,6 +74,9 @@ class _VoiceCallScreenState extends State<VoiceCallScreen>
       duration: const Duration(milliseconds: 1000),
     )..repeat(reverse: true);
 
+    // 断开旧服务并重置单例，确保切换到新的服务配置
+    XiaozhiService.resetInstance();
+
     // 获取XiaozhiService实例
     _xiaozhiService = XiaozhiService(
       macAddress: widget.xiaozhiConfig.macAddress,
@@ -86,6 +89,7 @@ class _VoiceCallScreenState extends State<VoiceCallScreen>
       wsUrl: widget.xiaozhiConfig.websocketUrl?.isNotEmpty == true
           ? widget.xiaozhiConfig.websocketUrl!
           : ConfigProvider.OFFICIAL_WS_URL,
+      configType: widget.xiaozhiConfig.configType,
       sessionId: widget.conversation.id,
     );
 

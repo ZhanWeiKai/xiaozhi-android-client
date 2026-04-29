@@ -48,6 +48,7 @@ class XiaozhiService {
   final String otaUrl;
   final String clientId;
   final String wsUrl;
+  final String configType; // "official" 或 "custom"
   String? _sessionId; // 会话ID将由服务器提供
 
   XiaozhiWebSocketManager? _webSocketManager;
@@ -66,6 +67,7 @@ class XiaozhiService {
     required String otaUrl,
     required String clientId,
     required String wsUrl,
+    String configType = 'official',
     String? sessionId,
   }) {
     _instance ??= XiaozhiService._internal(
@@ -73,6 +75,7 @@ class XiaozhiService {
       otaUrl: otaUrl,
       clientId: clientId,
       wsUrl: wsUrl,
+      configType: configType,
       sessionId: sessionId,
     );
     return _instance!;
@@ -84,6 +87,7 @@ class XiaozhiService {
     required this.otaUrl,
     required this.clientId,
     required this.wsUrl,
+    required this.configType,
     String? sessionId,
   }) {
     _sessionId = sessionId;
@@ -92,6 +96,11 @@ class XiaozhiService {
 
   /// 获取实例
   static XiaozhiService? get instance => _instance;
+
+  /// 重置单例，允许创建新的实例（切换不同服务时调用）
+  static void resetInstance() {
+    _instance = null;
+  }
 
   /// 切换到语音通话模式
   Future<void> switchToVoiceCallMode() async {
@@ -147,6 +156,7 @@ class XiaozhiService {
       otaUrl: otaUrl,
       clientId: clientId,
       wsUrl: wsUrl,
+      configType: configType,
     );
 
     // 添加WebSocket事件监听
@@ -194,6 +204,7 @@ class XiaozhiService {
         otaUrl: otaUrl,
         clientId: clientId,
         wsUrl: wsUrl,
+        configType: configType,
       );
 
       // 添加WebSocket事件监听
@@ -325,12 +336,13 @@ class XiaozhiService {
       print('$TAG: 设备ID: $macAddress');
       print('$TAG: Client-ID: $clientId');
 
-      // 使用 WebSocketManager 连接（wsUrl 与 WebUI 一致，从配置中 hardcode）
+      // 使用 WebSocketManager 连接
       _webSocketManager = XiaozhiWebSocketManager(
         deviceId: macAddress,
         otaUrl: otaUrl,
         clientId: clientId,
         wsUrl: wsUrl,
+        configType: configType,
       );
       _webSocketManager!.addListener(_onWebSocketEvent);
       await _webSocketManager!.connect();

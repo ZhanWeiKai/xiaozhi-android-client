@@ -181,6 +181,10 @@ class _ChatScreenState extends State<ChatScreen> {
       (config) => config.id == widget.conversation.configId,
     );
 
+    // 断开旧服务并重置单例，确保切换到新的服务配置
+    await _xiaozhiService?.dispose();
+    XiaozhiService.resetInstance();
+
     _xiaozhiService = XiaozhiService(
       macAddress: xiaozhiConfig.macAddress,
       otaUrl: xiaozhiConfig.otaUrl?.isNotEmpty == true
@@ -192,6 +196,7 @@ class _ChatScreenState extends State<ChatScreen> {
       wsUrl: xiaozhiConfig.websocketUrl?.isNotEmpty == true
           ? xiaozhiConfig.websocketUrl!
           : ConfigProvider.OFFICIAL_WS_URL,
+      configType: xiaozhiConfig.configType,
     );
 
     // 添加消息监听器
