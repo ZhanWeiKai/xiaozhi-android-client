@@ -70,11 +70,13 @@ class XiaozhiService {
 
   // 阈值（与 WebUI 对齐）
   static const double _userSpeakingThreshold = 0.04;  // 用户说话阈值
-  static const double _userInterruptThreshold = 0.1;  // 用户打断 AI 阈值
+  static const double _userInterruptThreshold = 0.03;  // 用户打断 AI 阈值（AI播放时AEC压低增益，需更低阈值）
   static const int _silenceTimeoutMs = 1000;           // 静音超时 1 秒
+  static const int _interruptFrames = 3;               // 打断确认帧数（约 180ms）
 
   // 调试计数器
   int _audioLevelCount = 0;
+  int _interruptCandidateCount = 0; // 连续超过打断阈值的帧计数
 
   /// 工厂构造函数，实现单例模式
   factory XiaozhiService({
@@ -487,21 +489,30 @@ class XiaozhiService {
   /// AI_SPEAKING 状态：检测用户打断
   void _handleAudioLevelInAiSpeaking(double audioLevel) {
     if (audioLevel > _userInterruptThreshold) {
-      print('[VoiceCall] 用户打断 AI (audioLevel=${audioLevel.toStringAsFixed(3)}), AI_SPEAKING → USER_SPEAKING');
+      _interruptCandidateCount++;
+      if (_interruptCandidateCount >= _interruptFrames) {
+        print('[VoiceCall] 用户打断 AI (audioLevel=${audioLevel.toStringAsFixed(3)}, 连续${_interruptCandidateCount}帧), AI_SPEAKING → USER_SPEAKING');
+        _interruptCandidateCount = 0;
 
-      // 发送 abort（对应 WebUI ChatStateManager AI_SPEAKING.handleAudioLevel）
-      if (_sessionId != null && _webSocketManager != null && _webSocketManager!.isConnected) {
-        final abortMessage = {'session_id': _sessionId, 'type': 'abort'};
-        _webSocketManager?.sendMessage(jsonEncode(abortMessage));
-        print('[VoiceCall] 已发送 → abort (用户打断)');
+        // 发送 abort（对应 WebUI ChatStateManager AI_SPEAKING.handleAudioLevel）
+        if (_sessionId != null && _webSocketManager != null && _webSocketManager!.isConnected) {
+          final abortMessage = {'session_id': _sessionId, 'type': 'abort'};
+          _webSocketManager?.sendMessage(jsonEncode(abortMessage));
+          print('[VoiceCall] 已发送 → abort (用户打断)');
+        }
+
+        // 停止播放、清空队列（对应 WebUI USER_START_SPEAKING 事件处理）
+        // Android: 不销毁播放器，改用静音（避免 AudioTrack 无法重建的问题）
+        AudioUtil.mutePlayback();
+
+        // 切换到 USER_SPEAKING
+        _setState(VoiceCallState.userSpeaking);
       }
-
-      // 停止播放、清空队列（对应 WebUI USER_START_SPEAKING 事件处理）
-      // Android: 不销毁播放器，改用静音（避免 AudioTrack 无法重建的问题）
-      AudioUtil.mutePlayback();
-
-      // 切换到 USER_SPEAKING
-      _setState(VoiceCallState.userSpeaking);
+    } else {
+      // 低于阈值，重置计数
+      if (_interruptCandidateCount > 0) {
+        _interruptCandidateCount = 0;
+      }
     }
   }
 
@@ -561,6 +572,8 @@ class XiaozhiService {
 
       case VoiceCallState.aiSpeaking:
         if (oldState == VoiceCallState.aiSpeaking) return; // 避免重复进入
+        // 重置打断计数器
+        _interruptCandidateCount = 0;
         // 对应 WebUI: AI_START_SPEAKING → playAudio()
         // Android: 播放由 _handleReceivedAudio 直接触发
         print('[VoiceCall] onEnter AI_SPEAKING: 等待服务端音频');
@@ -672,10 +685,14 @@ class XiaozhiService {
             print('[VoiceCall] ← TTS: $text');
             _dispatchEvent(XiaozhiServiceEvent(XiaozhiServiceEventType.textMessage, text));
           } else if (state == 'stop') {
-            // TTS 播放结束 → AI_SPEAKING → IDLE
-            // 对应 WebUI: audioService.onQueueEmpty → setState(IDLE)
-            print('[VoiceCall] ← TTS stop: AI_SPEAKING → IDLE');
-            _setState(VoiceCallState.idle);
+            // TTS 播放结束 → 仅在 AI_SPEAKING 时才切换到 IDLE
+            // 如果用户已打断（状态已是 USER_SPEAKING），不覆盖
+            if (_voiceCallState == VoiceCallState.aiSpeaking) {
+              print('[VoiceCall] ← TTS stop: AI_SPEAKING → IDLE');
+              _setState(VoiceCallState.idle);
+            } else {
+              print('[VoiceCall] ← TTS stop: 忽略（当前状态=$_voiceCallState，非 AI_SPEAKING）');
+            }
           }
           break;
 
