@@ -24,8 +24,14 @@ class AudioUtil {
   static bool _isPlayerInitialized = false;
   static bool _isRecording = false;
   static bool _isPlaying = false;
+  static bool _playbackMuted = false; // 静音标志（不销毁播放器）
+  static bool _isPlayerReinitializing = false; // 防止并发重初始化
   static final StreamController<Uint8List> _audioStreamController =
       StreamController<Uint8List>.broadcast();
+
+  // 音频电平流（供状态机检测用户说话/静音/打断）
+  static final StreamController<double> _audioLevelController =
+      StreamController<double>.broadcast();
   static String? _tempFilePath;
   static Timer? _audioProcessingTimer;
 
@@ -43,8 +49,11 @@ class AudioUtil {
   // FlutterPcmPlayer实例
   static FlutterPcmPlayer? _pcmPlayer;
 
-  /// 获取音频流
+  /// 获取音频流（Opus 编码后的数据）
   static Stream<Uint8List> get audioStream => _audioStreamController.stream;
+
+  /// 获取音频电平流（0~1，供状态机使用）
+  static Stream<double> get audioLevelStream => _audioLevelController.stream;
 
   /// 初始化音频录制器
   static Future<void> initRecorder() async {
@@ -130,13 +139,14 @@ class AudioUtil {
 
   /// 初始化音频播放器
   static Future<void> initPlayer() async {
-    // 确保任何旧播放器被释放
-    await stopPlaying();
+    // 防止并发初始化
+    if (_isPlayerReinitializing) return;
+    _isPlayerReinitializing = true;
 
     try {
       print('$TAG: 使用简单方式初始化PCM播放器');
 
-      // 创建新的播放器实例 - 完全按照官方示例的简单方式
+      // 创建新的播放器实例
       _pcmPlayer = FlutterPcmPlayer();
       await _pcmPlayer!.initialize();
       await _pcmPlayer!.play();
@@ -146,15 +156,36 @@ class AudioUtil {
     } catch (e) {
       print('$TAG: PCM播放器初始化失败: $e');
       _isPlayerInitialized = false;
+      _pcmPlayer = null;
+    } finally {
+      _isPlayerReinitializing = false;
     }
+  }
+
+  /// 静音播放（不销毁播放器，用于用户说话时暂停 AI 音频）
+  static void mutePlayback() {
+    _playbackMuted = true;
+    print('$TAG: 播放已静音');
+  }
+
+  /// 取消静音
+  static void unmutePlayback() {
+    _playbackMuted = false;
+    print('$TAG: 播放已取消静音');
   }
 
   /// 播放Opus音频数据
   static Future<void> playOpusData(Uint8List opusData) async {
+    // 静音时跳过（不销毁播放器）
+    if (_playbackMuted) return;
+
     try {
       // 如果播放器未初始化，先初始化
       if (!_isPlayerInitialized || _pcmPlayer == null) {
+        // 防止并发重初始化
+        if (_isPlayerReinitializing) return;
         await initPlayer();
+        if (!_isPlayerInitialized) return; // 初始化失败，跳过这一帧
       }
 
       // 解码Opus数据
@@ -174,11 +205,11 @@ class AudioUtil {
         await _pcmPlayer!.feed(pcmBytes);
       }
     } catch (e) {
-      print('$TAG: 播放失败: $e');
-
-      // 简单重置并重新初始化
-      await stopPlaying();
-      await initPlayer();
+      print('$TAG: 播放失败: $e（跳过，不重试）');
+      // 不再尝试 stopPlaying + initPlayer（这会导致无限循环）
+      // 仅标记为未初始化，下一帧到来时会尝试重新初始化
+      _isPlayerInitialized = false;
+      _pcmPlayer = null;
     }
   }
 
@@ -199,6 +230,7 @@ class AudioUtil {
   /// 释放资源
   static Future<void> dispose() async {
     _audioStreamController.close();
+    _audioLevelController.close();
     print('$TAG: 资源已释放');
   }
 
@@ -244,6 +276,11 @@ class AudioUtil {
         stream.listen(
           (data) async {
             if (data.isNotEmpty && data.length % 2 == 0) {
+              // 计算音频电平并发布（供状态机检测用户说话/静音/打断）
+              final level = computeAudioLevel(data);
+              _audioLevelController.add(level);
+
+              // 编码为 Opus 并发布
               final opusData = await encodeToOpus(data);
               if (opusData != null) {
                 _audioStreamController.add(opusData);
@@ -338,4 +375,21 @@ class AudioUtil {
 
   /// 检查是否正在播放
   static bool get isPlaying => _isPlaying;
+
+  /// 计算 PCM16 音频电平（与 WebUI detectAudioLevel 对齐）
+  /// WebUI 用 Float32Array [-1.0, 1.0]，Android 用 PCM16 [-32768, 32767]
+  /// 归一化后算法一致：sum(|sample|) / count
+  static double computeAudioLevel(Uint8List pcmData) {
+    int sampleCount = pcmData.length ~/ 2;
+    if (sampleCount == 0) return 0.0;
+    double sum = 0;
+    for (int i = 0; i < pcmData.length; i += 2) {
+      // PCM16 小端字节序
+      int sample = pcmData[i] | (pcmData[i + 1] << 8);
+      // 有符号转换
+      if (sample >= 32768) sample -= 65536;
+      sum += sample.abs();
+    }
+    return sum / sampleCount / 32768.0; // 归一化到 0~1
+  }
 }

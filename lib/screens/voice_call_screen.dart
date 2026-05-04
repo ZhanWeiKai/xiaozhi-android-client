@@ -29,7 +29,6 @@ class _VoiceCallScreenState extends State<VoiceCallScreen>
     with SingleTickerProviderStateMixin {
   late XiaozhiService _xiaozhiService;
   bool _isConnected = false;
-  bool _isSpeaking = false;
   String _statusText = '正在连接...';
   Timer? _callTimer;
   Duration _callDuration = Duration.zero;
@@ -102,59 +101,93 @@ class _VoiceCallScreenState extends State<VoiceCallScreen>
   }
 
   void _handleServerMessage(dynamic message) {
-    // 处理服务器发来的消息
-    if (message is Map<String, dynamic> && message['type'] == 'hello') {
-      print('收到服务器hello消息: $message');
+    if (message is! Map<String, dynamic>) return;
+
+    final type = message['type'];
+    print('[VoiceCallScreen] ← 收到消息: type=$type');
+
+    if (type == 'hello') {
+      print('[VoiceCallScreen] ← hello, 录音将由 service 自动开始');
       setState(() {
         _serverReady = true;
+        _isConnected = true;
+        _statusText = '已连接';
       });
-
-      // 服务器准备好后延迟短暂时间再自动开始录音
-      // 这样可以确保会话ID已经被正确设置
-      if (_isConnected && !_isSpeaking) {
-        // 延迟1秒，确保服务端和客户端都已准备就绪
-        Future.delayed(const Duration(milliseconds: 1000), () {
-          if (mounted && _isConnected && !_isSpeaking) {
-            print('准备开始录音...');
-            _startSpeaking();
-          }
+      if (mounted) {
+        _showCustomSnackbar(
+          message: '已连接，正在开始录音...',
+          icon: Icons.check_circle,
+          iconColor: Colors.greenAccent,
+        );
+      }
+    } else if (type == 'stt') {
+      // 用户语音识别结果
+      final text = message['text'] ?? '';
+      if (text.isNotEmpty) {
+        print('[VoiceCallScreen] ← STT: $text');
+        _addMessage(text, MessageRole.user);
+      }
+    } else if (type == 'tts') {
+      final state = message['state'] ?? '';
+      final text = message['text'] ?? '';
+      if (state == 'sentence_start' && text.isNotEmpty) {
+        print('[VoiceCallScreen] ← TTS: $text');
+        _addMessage(text, MessageRole.assistant);
+        setState(() {
+          _statusText = 'AI 回复中';
         });
+      } else if (state == 'stop') {
+        setState(() {
+          _statusText = '等待说话';
+        });
+      }
+    } else if (type == 'llm') {
+      final text = message['text'] ?? '';
+      if (text.isNotEmpty) {
+        print('[VoiceCallScreen] ← LLM: $text');
       }
     }
   }
 
+  /// 添加消息到会话
+  void _addMessage(String text, MessageRole role) {
+    Provider.of<ConversationProvider>(context, listen: false).addMessage(
+      conversationId: widget.conversation.id,
+      role: role,
+      content: text,
+    );
+  }
+
   @override
   void dispose() {
-    // 切换回普通聊天模式
-    _xiaozhiService.switchToChatMode();
+    print('[VoiceCallScreen] dispose: 发送 abort + 断开连接');
+    // 发送 abort + 断开连接
+    _xiaozhiService.sendAbortMessage();
+    _xiaozhiService.disconnectVoiceCall();
     _callTimer?.cancel();
     _audioVisualizerTimer?.cancel();
     _animationController.dispose();
-
-    // 确保停止所有音频播放
-    _xiaozhiService.stopPlayback();
-
     super.dispose();
   }
 
   void _connectToVoiceService() async {
     setState(() {
-      _statusText = '正在准备...';
+      _statusText = '正在连接...';
     });
 
     try {
-      // 切换到语音通话模式
-      await _xiaozhiService.switchToVoiceCallMode();
+      // ★ 关键：调用 connectVoiceCall() 建立 WebSocket 连接 + 初始化音频
+      // （原来的 switchToVoiceCallMode() 只初始化了音频，从未建立 WebSocket 连接）
+      await _xiaozhiService.connectVoiceCall();
 
       setState(() {
-        _statusText = '已连接';
         _isConnected = true;
+        _statusText = '已连接，等待 hello...';
       });
 
-      // 显示连接成功的提示
       if (mounted) {
         _showCustomSnackbar(
-          message: '已进入语音通话模式',
+          message: 'WebSocket 已连接，等待服务器 hello...',
           icon: Icons.check_circle,
           iconColor: Colors.greenAccent,
         );
@@ -162,25 +195,25 @@ class _VoiceCallScreenState extends State<VoiceCallScreen>
 
       _startCallTimer();
 
-      // 添加会话消息
       Provider.of<ConversationProvider>(context, listen: false).addMessage(
         conversationId: widget.conversation.id,
         role: MessageRole.assistant,
         content: '语音通话已开始',
       );
 
-      // 直接开始录音
-      _startSpeaking();
+      // ★ 不再直接调用 _startSpeaking()！
+      // 录音会在 xiaozhi_service 收到 hello 后自动开始
+      print('[VoiceCallScreen] 连接完成，等待 hello 后自动开始录音...');
     } catch (e) {
       setState(() {
-        _statusText = '准备失败';
+        _statusText = '连接失败';
         _isConnected = false;
       });
-      print('准备失败: $e');
+      print('[VoiceCallScreen] 连接失败: $e');
 
       if (mounted) {
         _showCustomSnackbar(
-          message: '进入语音通话模式失败: $e',
+          message: '连接失败: $e',
           icon: Icons.error_outline,
           iconColor: Colors.redAccent,
         );
@@ -202,74 +235,27 @@ class _VoiceCallScreenState extends State<VoiceCallScreen>
     ) {
       if (_isConnected) {
         setState(() {
-          // Simulate audio levels
           for (int i = 0; i < _audioLevels.length - 1; i++) {
             _audioLevels[i] = _audioLevels[i + 1];
           }
 
-          if (_isSpeaking) {
+          final state = _xiaozhiService.voiceCallState;
+          if (state == VoiceCallState.userSpeaking) {
+            // 用户说话 - 高振幅
             _audioLevels[_audioLevels.length - 1] =
                 0.05 + (0.6 * (0.5 + 0.5 * _animationController.value));
+          } else if (state == VoiceCallState.aiSpeaking) {
+            // AI 回复 - 中振幅
+            _audioLevels[_audioLevels.length - 1] =
+                0.05 + (0.4 * (0.5 + 0.5 * _animationController.value));
           } else {
+            // 空闲 - 低振幅
             _audioLevels[_audioLevels.length - 1] =
                 0.05 + (0.1 * (0.5 + 0.5 * _animationController.value));
           }
         });
       }
     });
-  }
-
-  // 开始录音
-  void _startSpeaking() {
-    if (!_isSpeaking) {
-      setState(() {
-        _isSpeaking = true;
-      });
-
-      try {
-        // 开始录音并订阅音频流
-        _xiaozhiService
-            .startListeningCall()
-            .then((_) {
-              if (mounted) {
-                _showCustomSnackbar(
-                  message: '正在录音...',
-                  icon: Icons.mic,
-                  iconColor: Colors.greenAccent,
-                );
-              }
-            })
-            .catchError((e) {
-              print('开始录音失败: $e');
-              // 如果失败，恢复状态
-              if (mounted) {
-                setState(() {
-                  _isSpeaking = false;
-                });
-
-                _showCustomSnackbar(
-                  message: '开始录音失败: $e',
-                  icon: Icons.error,
-                  iconColor: Colors.redAccent,
-                );
-              }
-            });
-      } catch (e) {
-        print('开始录音失败: $e');
-        // 如果失败，恢复状态
-        setState(() {
-          _isSpeaking = false;
-        });
-
-        if (mounted) {
-          _showCustomSnackbar(
-            message: '开始录音失败: $e',
-            icon: Icons.error,
-            iconColor: Colors.redAccent,
-          );
-        }
-      }
-    }
   }
 
   // 发送打断消息
@@ -283,6 +269,19 @@ class _VoiceCallScreenState extends State<VoiceCallScreen>
         icon: Icons.pan_tool,
         iconColor: Colors.orangeAccent,
       );
+    }
+  }
+
+  /// 根据状态机获取状态文字
+  String _getStatusLabel() {
+    final state = _xiaozhiService.voiceCallState;
+    switch (state) {
+      case VoiceCallState.idle:
+        return '等待说话';
+      case VoiceCallState.userSpeaking:
+        return '正在录音';
+      case VoiceCallState.aiSpeaking:
+        return 'AI 回复中';
     }
   }
 
@@ -328,8 +327,9 @@ class _VoiceCallScreenState extends State<VoiceCallScreen>
           child: IconButton(
             icon: const Icon(Icons.arrow_back, color: Colors.white, size: 24),
             onPressed: () {
-              // 返回前停止播放
-              _xiaozhiService.stopPlayback();
+              // 返回前发送 abort 并断开连接
+              _xiaozhiService.sendAbortMessage();
+              _xiaozhiService.disconnectVoiceCall();
               Navigator.pop(context);
             },
           ),
@@ -450,7 +450,7 @@ class _VoiceCallScreenState extends State<VoiceCallScreen>
                       ),
                       const SizedBox(width: 8),
                       Text(
-                        _isSpeaking ? '$_statusText (正在录音)' : _statusText,
+                        _getStatusLabel(),
                         style: TextStyle(
                           color: _isConnected ? Colors.green : Colors.red,
                           fontSize: 16,
@@ -541,7 +541,8 @@ class _VoiceCallScreenState extends State<VoiceCallScreen>
   }
 
   Color _getBarColor(int index, double level) {
-    if (_isSpeaking) {
+    final state = _xiaozhiService.voiceCallState;
+    if (state == VoiceCallState.userSpeaking) {
       // 渐变从蓝色到绿色
       double position = index / _audioLevels.length;
       return Color.lerp(
