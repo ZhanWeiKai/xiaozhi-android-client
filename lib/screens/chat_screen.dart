@@ -197,6 +197,7 @@ class _ChatScreenState extends State<ChatScreen> {
           ? xiaozhiConfig.websocketUrl!
           : ConfigProvider.OFFICIAL_WS_URL,
       configType: xiaozhiConfig.configType,
+      lang: xiaozhiConfig.lang,
     );
 
     // 添加消息监听器

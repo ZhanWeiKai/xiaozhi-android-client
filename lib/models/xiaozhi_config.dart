@@ -7,6 +7,7 @@ class XiaozhiConfig {
   final String configType; // "official" 或 "custom"
   final String? otaUrl; // 自定义 server 的 OTA 地址
   final String? clientId; // 自定义 server 的 CLIENT_ID (UUID)
+  final String lang; // 语言（自建 Worker 使用：zh-CN/zh-TW/en-US/ja-JP），默认 zh-CN
 
   XiaozhiConfig({
     required this.id,
@@ -17,6 +18,7 @@ class XiaozhiConfig {
     this.configType = 'official',
     this.otaUrl,
     this.clientId,
+    this.lang = 'zh-CN',
   });
 
   factory XiaozhiConfig.fromJson(Map<String, dynamic> json) {
@@ -29,6 +31,7 @@ class XiaozhiConfig {
       configType: json['configType'] ?? 'official',
       otaUrl: json['otaUrl'],
       clientId: json['clientId'],
+      lang: json['lang'] ?? 'zh-CN',
     );
   }
 
@@ -42,6 +45,7 @@ class XiaozhiConfig {
       'configType': configType,
       'otaUrl': otaUrl,
       'clientId': clientId,
+      'lang': lang,
     };
   }
 
@@ -53,6 +57,7 @@ class XiaozhiConfig {
     String? configType,
     String? otaUrl,
     String? clientId,
+    String? lang,
   }) {
     return XiaozhiConfig(
       id: id,
@@ -63,6 +68,7 @@ class XiaozhiConfig {
       configType: configType ?? this.configType,
       otaUrl: otaUrl ?? this.otaUrl,
       clientId: clientId ?? this.clientId,
+      lang: lang ?? this.lang,
     );
   }
 }

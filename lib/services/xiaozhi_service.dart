@@ -52,6 +52,7 @@ class XiaozhiService {
   final String clientId;
   final String wsUrl;
   final String configType;
+  final String lang;
   String? _sessionId;
 
   XiaozhiWebSocketManager? _webSocketManager;
@@ -85,6 +86,7 @@ class XiaozhiService {
     required String clientId,
     required String wsUrl,
     String configType = 'official',
+    String lang = 'zh-CN',
     String? sessionId,
   }) {
     _instance ??= XiaozhiService._internal(
@@ -93,6 +95,7 @@ class XiaozhiService {
       clientId: clientId,
       wsUrl: wsUrl,
       configType: configType,
+      lang: lang,
       sessionId: sessionId,
     );
     return _instance!;
@@ -105,6 +108,7 @@ class XiaozhiService {
     required this.clientId,
     required this.wsUrl,
     required this.configType,
+    this.lang = 'zh-CN',
     String? sessionId,
   }) {
     _sessionId = sessionId;
@@ -132,6 +136,7 @@ class XiaozhiService {
       clientId: clientId,
       wsUrl: wsUrl,
       configType: configType,
+      lang: lang,
     );
     _webSocketManager!.addListener(_onWebSocketEvent);
 
@@ -168,7 +173,7 @@ class XiaozhiService {
     try {
       _webSocketManager = XiaozhiWebSocketManager(
         deviceId: macAddress, otaUrl: otaUrl,
-        clientId: clientId, wsUrl: wsUrl, configType: configType,
+        clientId: clientId, wsUrl: wsUrl, configType: configType, lang: lang,
       );
       _webSocketManager!.addListener(_onWebSocketEvent);
       await _webSocketManager!.connect();
@@ -200,7 +205,7 @@ class XiaozhiService {
 
       _webSocketManager = XiaozhiWebSocketManager(
         deviceId: macAddress, otaUrl: otaUrl,
-        clientId: clientId, wsUrl: wsUrl, configType: configType,
+        clientId: clientId, wsUrl: wsUrl, configType: configType, lang: lang,
       );
       _webSocketManager!.addListener(_onWebSocketEvent);
       await _webSocketManager!.connect();
@@ -712,11 +717,97 @@ class XiaozhiService {
           }
           break;
 
+        case 'mcp':
+          // 自建 Worker：hello 声明了 features.mcp，上游会发起 MCP 握手，
+          // 客户端作为 MCP 服务端必须回应，否则上游会一直挂起。
+          _handleMcpMessage(jsonData);
+          break;
+
         default:
           print('[VoiceCall] ← 未知消息: $type');
       }
     } catch (e) {
       print('[VoiceCall] 解析消息失败: $e');
     }
+  }
+
+  /// 处理 MCP 消息（自建 Worker 模式）。
+  /// 客户端作为 MCP 服务端，回应上游的 initialize / tools/list / tools/call 等 JSON-RPC 请求。
+  /// 响应必须原样回传请求里的 session_id 和 payload.id（对齐 simulate.html）。
+  void _handleMcpMessage(Map<String, dynamic> jsonData) {
+    final payload = jsonData['payload'];
+    if (payload is! Map<String, dynamic>) {
+      print('[VoiceCall] ← mcp: payload 非对象，忽略');
+      return;
+    }
+
+    final sessionId = jsonData['session_id'];
+    final method = payload['method'] as String?;
+    final id = payload['id']; // 可能是数字或 null
+
+    // 通知（无 id）：仅记录，不回答
+    if (id == null) {
+      print('[VoiceCall] ← mcp notification: $method');
+      return;
+    }
+
+    Map<String, dynamic> resp;
+
+    if (method == 'initialize') {
+      resp = {
+        'type': 'mcp',
+        'session_id': sessionId,
+        'payload': {
+          'jsonrpc': '2.0',
+          'id': id,
+          'result': {
+            'protocolVersion': '2024-11-05',
+            'capabilities': {'tools': {}},
+            'serverInfo': {'name': 'xiaozhi-android', 'version': '1.1.2'},
+          },
+        },
+      };
+      print('[VoiceCall] → mcp initialize response id=$id');
+    } else if (method == 'tools/list') {
+      // 设备不暴露工具，返回空列表，Worker 代理会注入自己的工具
+      resp = {
+        'type': 'mcp',
+        'session_id': sessionId,
+        'payload': {
+          'jsonrpc': '2.0',
+          'id': id,
+          'result': {'tools': []},
+        },
+      };
+      print('[VoiceCall] → mcp tools/list response (empty) id=$id');
+    } else if (method == 'tools/call') {
+      // 没有该工具，返回 -32601（仍必须回答，避免上游挂起）
+      final params = payload['params'];
+      final toolName = (params is Map<String, dynamic>) ? (params['name'] ?? '') : '';
+      resp = {
+        'type': 'mcp',
+        'session_id': sessionId,
+        'payload': {
+          'jsonrpc': '2.0',
+          'id': id,
+          'error': {'code': -32601, 'message': 'Unknown tool: $toolName'},
+        },
+      };
+      print('[VoiceCall] → mcp tools/call error (no tools) id=$id');
+    } else {
+      // 其它带 id 的请求：统一回 method not found
+      resp = {
+        'type': 'mcp',
+        'session_id': sessionId,
+        'payload': {
+          'jsonrpc': '2.0',
+          'id': id,
+          'error': {'code': -32601, 'message': 'Method not found: $method'},
+        },
+      };
+      print('[VoiceCall] → mcp error (unhandled $method) id=$id');
+    }
+
+    _webSocketManager?.sendMessage(jsonEncode(resp));
   }
 }

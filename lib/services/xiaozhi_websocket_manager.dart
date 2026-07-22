@@ -25,13 +25,17 @@ class XiaozhiWebSocketManager {
   static const String TAG = "XiaozhiWebSocket";
   static const int RECONNECT_DELAY = 3000;
 
+  // 自建 Worker 模式：模型固定（对齐 simulate.html）；语言由配置传入
+  static const String WORKER_MODEL = 'floki';
+
   WebSocketChannel? _channel;
   String? _wsUrl;
   String? _deviceId;
   String? _token;
   String? _otaUrl;
   String? _clientId;
-  String _configType; // "official" 或 "custom"
+  String _configType; // "official" / "custom" / "worker"
+  String _lang; // 设备语言（自建 Worker：OTA Accept-Language + WS lang 参数）
 
   final List<XiaozhiWebSocketListener> _listeners = [];
   bool _isReconnecting = false;
@@ -40,19 +44,22 @@ class XiaozhiWebSocketManager {
 
   /// 构造函数
   /// configType: "official" = 官方 xiaozhi.me (hardcoded WS_URL + headers auth)
-  ///             "custom" = 自定义 server (WS_URL from OTA + query params auth)
+  ///             "custom"  = 自定义 server (WS_URL from OTA + query params auth)
+  ///             "worker"  = 自建 Worker (同 custom，但 query 加 dm+lang、hello 加 features.mcp)
   XiaozhiWebSocketManager({
     required String deviceId,
     required String otaUrl,
     required String clientId,
     required String wsUrl,
     String configType = 'official',
+    String lang = 'zh-CN',
   }) : _deviceId = deviceId,
       _otaUrl = otaUrl,
       _clientId = clientId,
       _wsUrl = wsUrl,
-      _configType = configType {
-    print('[connect-xiaozhi] WebSocketManager 创建: configType=$configType, wsUrl=$wsUrl, otaUrl=$otaUrl, deviceId=$deviceId, clientId=$clientId');
+      _configType = configType,
+      _lang = lang {
+    print('[connect-xiaozhi] WebSocketManager 创建: configType=$configType, wsUrl=$wsUrl, otaUrl=$otaUrl, deviceId=$deviceId, clientId=$clientId, lang=$lang');
   }
 
   /// 添加事件监听器
@@ -94,6 +101,11 @@ class XiaozhiWebSocketManager {
       request.headers.set('Device-Id', _deviceId!);
       request.headers.set('Client-Id', _clientId!);
       request.headers.set('Content-Type', 'application/json');
+      // 自建 Worker：OTA 需要带 dm 和 Accept-Language（对齐 simulate.html）
+      if (_configType == 'worker') {
+        request.headers.set('dm', WORKER_MODEL);
+        request.headers.set('Accept-Language', _lang);
+      }
       request.write(jsonEncode({
         'version': 2,
         'flash_size': 16777216,
@@ -180,19 +192,23 @@ class XiaozhiWebSocketManager {
         await disconnect();
       }
 
-      if (_configType == 'custom') {
-        // ===== 自定义 server 模式 =====
+      if (_configType == 'custom' || _configType == 'worker') {
+        // ===== 自定义 server / 自建 worker 模式 =====
         // WS_URL 从 OTA 响应获取，认证通过 URL query params 传递
         final otaWsUrl = otaResult['wsUrl'];
         if (otaWsUrl == null || otaWsUrl.isEmpty) {
-          throw Exception('自定义 server OTA 未返回 websocket.url');
+          throw Exception('${_configType == 'worker' ? '自建 worker' : '自定义 server'} OTA 未返回 websocket.url');
         }
         _wsUrl = otaWsUrl;
 
-        // 构建带认证参数的 URL（与 WebUI _build_ws_url 一致）
-        final fullUrl = _buildAuthUrl(_wsUrl!, _token!, _deviceId!, _clientId!);
+        // 构建带认证参数的 URL
+        // custom: authorization/device-id/client-id（与 WebUI _build_ws_url 一致）
+        // worker: 额外拼 dm + lang（对齐 simulate.html）
+        final fullUrl = _configType == 'worker'
+            ? _buildWorkerAuthUrl(_wsUrl!, _token!, _deviceId!, _clientId!)
+            : _buildAuthUrl(_wsUrl!, _token!, _deviceId!, _clientId!);
 
-        print('[connect-xiaozhi] 【步骤2-custom】开始连接 WebSocket (query params 认证)...');
+        print('[connect-xiaozhi] 【步骤2-$_configType】开始连接 WebSocket (query params 认证)...');
         print('[connect-xiaozhi] 目标: $fullUrl');
 
         _channel = IOWebSocketChannel.connect(Uri.parse(fullUrl));
@@ -249,6 +265,12 @@ class XiaozhiWebSocketManager {
     return '$baseUrl${separator}authorization=Bearer%20$token&device-id=$deviceId&client-id=$clientId';
   }
 
+  /// 构建自建 Worker 的 WebSocket URL（query params 认证 + dm + lang，对齐 simulate.html）
+  String _buildWorkerAuthUrl(String baseUrl, String token, String deviceId, String clientId) {
+    final separator = baseUrl.contains('?') ? '&' : '?';
+    return '$baseUrl${separator}authorization=Bearer%20$token&device-id=$deviceId&client-id=$clientId&dm=$WORKER_MODEL&lang=$_lang';
+  }
+
   /// 断开WebSocket连接
   Future<void> disconnect() async {
     _reconnectTimer?.cancel();
@@ -270,7 +292,25 @@ class XiaozhiWebSocketManager {
   void _sendHelloMessage() {
     Map<String, dynamic> hello;
 
-    if (_configType == 'custom') {
+    if (_configType == 'worker') {
+      // 自建 Worker hello：同 custom + features.mcp:true（声明 MCP 支持，触发上游 MCP 握手）
+      hello = {
+        "type": "hello",
+        "version": 3,
+        "features": {"mcp": true},
+        "audio_params": {
+          "format": "opus",
+          "sample_rate": 16000,
+          "channels": 1,
+          "frame_duration": 60,
+        },
+        "device_id": _deviceId,
+        "device_name": "xiaozhi-android",
+        "device_mac": _deviceId,
+        "token": _token,
+      };
+      print('[connect-xiaozhi] 【步骤3-worker】发送 hello 消息 (含 features.mcp/device_id/device_mac/token): ${jsonEncode(hello)}');
+    } else if (_configType == 'custom') {
       // 自定义 server hello：注入认证信息（与 WebUI handle_client_messages 中的注入逻辑一致）
       hello = {
         "type": "hello",

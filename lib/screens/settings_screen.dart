@@ -2315,6 +2315,60 @@ class _SettingsScreenState extends State<SettingsScreen>
                   ),
                 ),
               ),
+              const SizedBox(height: 12),
+              // 自建 Worker 选项（地址已内置，无需填写）
+              InkWell(
+                onTap: () {
+                  Navigator.pop(context);
+                  _showAddWorkerXiaozhiConfigDialog();
+                },
+                borderRadius: BorderRadius.circular(16),
+                child: Container(
+                  padding: const EdgeInsets.all(20),
+                  decoration: BoxDecoration(
+                    color: Colors.grey.shade50,
+                    borderRadius: BorderRadius.circular(16),
+                    border: Border.all(color: Colors.grey.shade200),
+                  ),
+                  child: Row(
+                    children: [
+                      Container(
+                        width: 48,
+                        height: 48,
+                        decoration: BoxDecoration(
+                          color: Colors.teal.shade50,
+                          borderRadius: BorderRadius.circular(12),
+                        ),
+                        child: Icon(Icons.hub, color: Colors.teal.shade600, size: 26),
+                      ),
+                      const SizedBox(width: 16),
+                      Expanded(
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            const Text(
+                              '自建 Worker',
+                              style: TextStyle(
+                                fontSize: 17,
+                                fontWeight: FontWeight.w600,
+                              ),
+                            ),
+                            const SizedBox(height: 4),
+                            Text(
+                              '连接内置 Worker 服务（OTA 自动获取）',
+                              style: TextStyle(
+                                color: Colors.grey.shade600,
+                                fontSize: 13,
+                              ),
+                            ),
+                          ],
+                        ),
+                      ),
+                      Icon(Icons.arrow_forward_ios, color: Colors.grey.shade400, size: 18),
+                    ],
+                  ),
+                ),
+              ),
             ],
           ),
         ),
@@ -2757,6 +2811,197 @@ class _SettingsScreenState extends State<SettingsScreen>
               ),
             ),
           ),
+    );
+  }
+
+  /// 添加自建 Worker 配置弹窗（OTA 地址已内置写死，只需填名称和语言）
+  void _showAddWorkerXiaozhiConfigDialog() {
+    final nameController = TextEditingController();
+    String selectedLang = 'zh-CN';
+
+    showDialog(
+      context: context,
+      builder: (context) => StatefulBuilder(
+        builder: (context, setDialogState) => Dialog(
+        shape: RoundedRectangleBorder(
+          borderRadius: BorderRadius.circular(20),
+        ),
+        elevation: 8,
+        child: Container(
+          padding: const EdgeInsets.all(24),
+          decoration: BoxDecoration(
+            color: Colors.white,
+            borderRadius: BorderRadius.circular(20),
+            boxShadow: [
+              BoxShadow(
+                color: Colors.black.withOpacity(0.1),
+                blurRadius: 12,
+                spreadRadius: 0,
+                offset: const Offset(0, 4),
+              ),
+            ],
+          ),
+          child: SingleChildScrollView(
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.stretch,
+              children: [
+                Row(
+                  mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                  children: [
+                    const Text(
+                      '添加自建 Worker',
+                      style: TextStyle(
+                        fontSize: 22,
+                        fontWeight: FontWeight.bold,
+                      ),
+                    ),
+                    Container(
+                      decoration: BoxDecoration(
+                        color: Colors.grey.shade100,
+                        borderRadius: BorderRadius.circular(12),
+                      ),
+                      child: IconButton(
+                        icon: const Icon(Icons.close, size: 22),
+                        onPressed: () => Navigator.pop(context),
+                        padding: const EdgeInsets.all(4),
+                        constraints: const BoxConstraints(),
+                      ),
+                    ),
+                  ],
+                ),
+                const SizedBox(height: 8),
+                const Text(
+                  'Worker 服务地址已内置，连接信息通过 OTA 自动获取',
+                  style: TextStyle(color: Colors.grey, fontSize: 14),
+                ),
+                const SizedBox(height: 24),
+                const Text(
+                  '服务名称',
+                  style: TextStyle(
+                    fontSize: 16,
+                    fontWeight: FontWeight.w600,
+                  ),
+                ),
+                const SizedBox(height: 8),
+                Container(
+                  decoration: BoxDecoration(
+                    color: Colors.white,
+                    borderRadius: BorderRadius.circular(12),
+                    border: Border.all(color: Colors.grey.shade300),
+                  ),
+                  child: TextField(
+                    controller: nameController,
+                    decoration: InputDecoration(
+                      hintText: '例如：我的 Worker',
+                      hintStyle: TextStyle(color: Colors.grey.shade400),
+                      contentPadding: const EdgeInsets.symmetric(
+                        horizontal: 16,
+                        vertical: 14,
+                      ),
+                      border: InputBorder.none,
+                    ),
+                  ),
+                ),
+                const SizedBox(height: 16),
+                const Text(
+                  '语言',
+                  style: TextStyle(
+                    fontSize: 16,
+                    fontWeight: FontWeight.w600,
+                  ),
+                ),
+                const SizedBox(height: 8),
+                Container(
+                  decoration: BoxDecoration(
+                    color: Colors.white,
+                    borderRadius: BorderRadius.circular(12),
+                    border: Border.all(color: Colors.grey.shade300),
+                  ),
+                  padding: const EdgeInsets.symmetric(horizontal: 16),
+                  child: DropdownButtonHideUnderline(
+                    child: DropdownButton<String>(
+                      value: selectedLang,
+                      isExpanded: true,
+                      items: const [
+                        DropdownMenuItem(value: 'zh-CN', child: Text('简体中文 (zh-CN)')),
+                        DropdownMenuItem(value: 'zh-TW', child: Text('繁體中文 (zh-TW)')),
+                        DropdownMenuItem(value: 'en-US', child: Text('English (en-US)')),
+                        DropdownMenuItem(value: 'ja-JP', child: Text('日本語 (ja-JP)')),
+                      ],
+                      onChanged: (value) {
+                        setDialogState(() {
+                          selectedLang = value ?? 'zh-CN';
+                        });
+                      },
+                    ),
+                  ),
+                ),
+                const SizedBox(height: 24),
+                ElevatedButton(
+                  onPressed: () {
+                    final name = nameController.text.trim();
+
+                    if (name.isEmpty) {
+                      ScaffoldMessenger.of(context).showSnackBar(
+                        const SnackBar(content: Text('请填写服务名称')),
+                      );
+                      return;
+                    }
+
+                    Provider.of<ConfigProvider>(
+                      context,
+                      listen: false,
+                    ).addWorkerXiaozhiConfig(name, selectedLang);
+
+                    Navigator.pop(context);
+                    ScaffoldMessenger.of(context).showSnackBar(
+                      const SnackBar(content: Text('自建 Worker 服务已添加')),
+                    );
+                  },
+                  style: ElevatedButton.styleFrom(
+                    backgroundColor: Colors.black,
+                    foregroundColor: Colors.white,
+                    elevation: 4,
+                    shadowColor: Colors.black.withOpacity(0.3),
+                    padding: const EdgeInsets.symmetric(vertical: 16),
+                    shape: RoundedRectangleBorder(
+                      borderRadius: BorderRadius.circular(12),
+                    ),
+                  ),
+                  child: const Text(
+                    '添加',
+                    style: TextStyle(
+                      fontSize: 16,
+                      fontWeight: FontWeight.w600,
+                    ),
+                  ),
+                ),
+                const SizedBox(height: 12),
+                OutlinedButton(
+                  onPressed: () => Navigator.pop(context),
+                  style: OutlinedButton.styleFrom(
+                    foregroundColor: Colors.black,
+                    side: const BorderSide(color: Colors.grey),
+                    padding: const EdgeInsets.symmetric(vertical: 16),
+                    shape: RoundedRectangleBorder(
+                      borderRadius: BorderRadius.circular(12),
+                    ),
+                  ),
+                  child: const Text(
+                    '取消',
+                    style: TextStyle(
+                      fontSize: 16,
+                      fontWeight: FontWeight.w500,
+                    ),
+                  ),
+                ),
+              ],
+            ),
+          ),
+        ),
+      ),
+      ),
     );
   }
 

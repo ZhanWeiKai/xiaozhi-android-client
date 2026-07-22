@@ -94,6 +94,10 @@ class ConfigProvider extends ChangeNotifier {
   static const String OFFICIAL_WS_URL = 'wss://api.tenclass.net/xiaozhi/v1/';
   static const String OFFICIAL_OTA_URL = 'https://api.tenclass.net/xiaozhi/ota/';
 
+  // 自建 Worker：写死部署域名，OTA 路径固定为 /xiaozhi/ota/（与 simulate.html 同源）
+  static const String WORKER_BASE = 'https://xiaozhi-myapp.weikaizhan80.workers.dev';
+  static const String WORKER_OTA_URL = '${WORKER_BASE}/xiaozhi/ota/';
+
   Future<void> addXiaozhiConfig(
     String name, {
     String? customMacAddress,
@@ -134,6 +138,30 @@ class ConfigProvider extends ChangeNotifier {
       configType: 'custom',
       otaUrl: otaUrl,
       clientId: clientId,
+    );
+
+    _xiaozhiConfigs.add(newConfig);
+    await _saveConfigs();
+    notifyListeners();
+  }
+
+  /// 添加自建 Worker 配置（OTA 地址写死，连接方式同 simulate.html）
+  /// 与 custom 模式的区别：configType='worker'，OTA 地址固定为 WORKER_OTA_URL
+  /// lang: 设备语言（OTA Accept-Language 头 + WS lang 参数）
+  Future<void> addWorkerXiaozhiConfig(String name, String lang) async {
+    final macAddress = await _getDeviceMacAddress();
+    final clientId = const Uuid().v4();
+
+    final newConfig = XiaozhiConfig(
+      id: DateTime.now().millisecondsSinceEpoch.toString(),
+      name: name,
+      websocketUrl: '',
+      macAddress: macAddress,
+      token: '',
+      configType: 'worker',
+      otaUrl: WORKER_OTA_URL,
+      clientId: clientId,
+      lang: lang,
     );
 
     _xiaozhiConfigs.add(newConfig);
