@@ -130,11 +130,6 @@ class XiaozhiService {
   Future<void> _init() async {
     print('[VoiceCall] XiaozhiService 初始化: mac=$macAddress, otaUrl=$otaUrl, clientId=$clientId, wsUrl=$wsUrl');
 
-    AudioUtil.workerVoiceLog = (configType == 'worker');
-    if (AudioUtil.workerVoiceLog) {
-      print('[worker_voice] XiaozhiService worker 模式已开启音频调试日志');
-    }
-
     _webSocketManager = XiaozhiWebSocketManager(
       deviceId: macAddress,
       otaUrl: otaUrl,
@@ -629,9 +624,6 @@ class XiaozhiService {
 
   /// 处理收到的音频数据（对应 WebUI onAudioMessage）
   void _handleReceivedAudio(Uint8List audioData) {
-    if (AudioUtil.workerVoiceLog) {
-      print('[worker_voice] ← audio frame: bytes=${audioData.length} state=$_voiceCallState');
-    }
     switch (_voiceCallState) {
       case VoiceCallState.idle:
         // 空闲时收到音频 → 切换到 AI_SPEAKING → 播放
@@ -678,9 +670,6 @@ class XiaozhiService {
         case 'hello':
           // 收到 hello → 开始全时录音（对应 WebUI prepareMediaResources 后的状态）
           print('[VoiceCall] ← hello, session_id=$_sessionId');
-          if (AudioUtil.workerVoiceLog) {
-            print('[worker_voice] ← hello resp: session_id=$_sessionId audio_params=${jsonData['audio_params']}');
-          }
           if (_isVoiceCallActive) {
             _startFullTimeRecording();
           }
@@ -731,10 +720,6 @@ class XiaozhiService {
         case 'mcp':
           // 自建 Worker：hello 声明了 features.mcp，上游会发起 MCP 握手，
           // 客户端作为 MCP 服务端必须回应，否则上游会一直挂起。
-          if (AudioUtil.workerVoiceLog) {
-            final m = (jsonData['payload'] as Map<String, dynamic>?)?['method'];
-            print('[worker_voice] ← mcp method=$m');
-          }
           _handleMcpMessage(jsonData);
           break;
 

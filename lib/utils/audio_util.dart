@@ -26,9 +26,6 @@ class AudioUtil {
   static bool _isPlaying = false;
   static bool _playbackMuted = false; // 静音标志（不销毁播放器）
   static bool _isPlayerReinitializing = false; // 防止并发重初始化
-
-  // [worker_voice] 调试开关：仅 worker 模式下打印音频帧/解码日志（由 XiaozhiService 按配置开启）
-  static bool workerVoiceLog = false;
   static final StreamController<Uint8List> _audioStreamController =
       StreamController<Uint8List>.broadcast();
 
@@ -188,17 +185,11 @@ class AudioUtil {
     // 否则 decoder 把帧头首字节 0x00 当 TOC 解，得到 pcmSamples=160 的垃圾 → 杂音。
     // 判据：首字节为 0，且 [14:16] 声明的长度 == 总长 - 16（直连裸 opus 不会同时满足）。
     Uint8List payload = opusData;
-    bool stripped = false;
     if (opusData.length >= 16 && opusData[0] == 0x00) {
       final declaredLen = (opusData[14] << 8) | opusData[15];
       if (declaredLen > 0 && declaredLen == opusData.length - 16) {
         payload = opusData.sublist(16);
-        stripped = true;
       }
-    }
-
-    if (workerVoiceLog) {
-      print('[worker_voice] decode: frameLen=${opusData.length} opusLen=${payload.length} stripped=$stripped head=${_hexHead(opusData, 16)}');
     }
 
     try {
@@ -212,10 +203,6 @@ class AudioUtil {
 
       // 解码Opus数据
       final Int16List pcmData = _decoder.decode(input: payload);
-
-      if (workerVoiceLog) {
-        print('[worker_voice] decode ok: pcmSamples=${pcmData.length}');
-      }
 
       // 准备PCM数据（按照示例直接方式）
       final Uint8List pcmBytes = Uint8List(pcmData.length * 2);
@@ -231,25 +218,12 @@ class AudioUtil {
         await _pcmPlayer!.feed(pcmBytes);
       }
     } catch (e) {
-      if (workerVoiceLog) {
-        print('[worker_voice] decode FAILED: opusLen=${payload.length} head=${_hexHead(payload, 16)} err=$e');
-      }
       print('$TAG: 播放失败: $e（跳过，不重试）');
       // 不再尝试 stopPlaying + initPlayer（这会导致无限循环）
       // 仅标记为未初始化，下一帧到来时会尝试重新初始化
       _isPlayerInitialized = false;
       _pcmPlayer = null;
     }
-  }
-
-  /// [worker_voice] dump 前 n 字节的 hex（调试用）
-  static String _hexHead(Uint8List data, int n) {
-    final len = data.length < n ? data.length : n;
-    final parts = <String>[];
-    for (int i = 0; i < len; i++) {
-      parts.add(data[i].toRadixString(16).padLeft(2, '0'));
-    }
-    return parts.join(' ');
   }
 
   /// 停止播放
