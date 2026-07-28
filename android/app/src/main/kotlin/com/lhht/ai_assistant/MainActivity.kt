@@ -6,6 +6,7 @@ import android.net.Uri
 import android.os.Build
 import android.os.Environment
 import android.provider.MediaStore
+import android.provider.AlarmClock
 import io.flutter.embedding.android.FlutterActivity
 import io.flutter.embedding.engine.FlutterEngine
 import io.flutter.plugin.common.MethodChannel
@@ -34,6 +35,21 @@ class MainActivity : FlutterActivity() {
                             result.success(mapOf("uri" to saved))
                         } catch (e: Exception) {
                             result.error("save_failed", e.message, null)
+                        }
+                    }
+                    "setSystemAlarm" -> {
+                        val hour = call.argument<Int>("hour")
+                        val minute = call.argument<Int>("minute")
+                        val label = call.argument<String>("label") ?: ""
+                        if (hour == null || minute == null) {
+                            result.error("no_time", "missing hour/minute", null)
+                            return@setMethodCallHandler
+                        }
+                        try {
+                            setSystemAlarm(hour, minute, label)
+                            result.success(true)
+                        } catch (e: Exception) {
+                            result.error("alarm_failed", e.message, null)
                         }
                     }
                     else -> result.notImplemented()
@@ -80,5 +96,19 @@ class MainActivity : FlutterActivity() {
             sendBroadcast(scanIntent)
             dest.absolutePath
         }
+    }
+
+    /// 设置系统时钟 App 的闹钟（ACTION_SET_ALARM 意图）。
+    /// 注意：会打开时钟 App；Android 16 的 BAL 限制下无法自动切回本 App，需手动返回。
+    private fun setSystemAlarm(hour: Int, minute: Int, label: String) {
+        val intent = Intent(AlarmClock.ACTION_SET_ALARM).apply {
+            putExtra(AlarmClock.EXTRA_HOUR, hour)
+            putExtra(AlarmClock.EXTRA_MINUTES, minute)
+            putExtra(AlarmClock.EXTRA_MESSAGE, label)
+            putExtra(AlarmClock.EXTRA_VIBRATE, true)
+            putExtra(AlarmClock.EXTRA_SKIP_UI, true)
+            flags = Intent.FLAG_ACTIVITY_NEW_TASK
+        }
+        startActivity(intent)
     }
 }

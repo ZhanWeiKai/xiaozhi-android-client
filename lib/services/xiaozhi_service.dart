@@ -372,6 +372,7 @@ class XiaozhiService {
         if (event.type == XiaozhiServiceEventType.textMessage) {
           if (event.data == message) return;
           if (!completer.isCompleted) {
+            print('[xz_dbg] ← sendText 收到回复');
             completer.complete(event.data as String);
             removeListener(onceListener);
           }
@@ -382,8 +383,14 @@ class XiaozhiService {
       }
       addListener(onceListener);
       _webSocketManager!.sendTextRequest(message);
+      if (configType == 'worker') {
+        print('[xz_dbg] → sendText: "$message" (等回复, 15s)');
+      }
       final timeoutTimer = Timer(const Duration(seconds: 15), () {
         if (!completer.isCompleted) {
+          if (configType == 'worker') {
+            print('[xz_dbg] ✗ sendText 请求超时（15s 无 textMessage 回复）: "$message"');
+          }
           completer.completeError('请求超时');
           removeListener(onceListener);
         }
@@ -657,6 +664,10 @@ class XiaozhiService {
       final Map<String, dynamic> jsonData = json.decode(message);
       final String type = jsonData['type'] ?? '';
 
+      if (configType == 'worker') {
+        print('[xz_dbg] ← msg type=$type');
+      }
+
       // 先调用消息监听器
       if (_messageListener != null) {
         _messageListener!(jsonData);
@@ -790,16 +801,18 @@ class XiaozhiService {
       final arguments = (params is Map<String, dynamic> && params['arguments'] is Map)
           ? Map<String, dynamic>.from(params['arguments'] as Map)
           : <String, dynamic>{};
-      print('[VoiceCall] ← mcp tools/call: $toolName args=$arguments id=$id');
+      final t0 = DateTime.now();
+      print('[xz_dbg] ← tools/call 收到: $toolName id=$id args=$arguments');
       final result = await _mcpTools.call(toolName.toString(), arguments);
+      final elapsed = DateTime.now().difference(t0).inMilliseconds;
       if (result != null) {
-        print('[VoiceCall] → mcp tools/call result ($toolName success=${result.success}): ${result.text}');
+        print('[xz_dbg] → tools/call 回传: $toolName (handler ${elapsed}ms) success=${result.success}: ${result.text}');
         _sendMcpResponse(jsonData, id, result: {
           'content': [{'type': 'text', 'text': result.text}],
           'isError': !result.success,
         });
       } else {
-        print('[VoiceCall] → mcp tools/call unknown tool: $toolName id=$id');
+        print('[xz_dbg] → tools/call 未知工具: $toolName (${elapsed}ms)');
         _sendMcpResponse(jsonData, id,
             error: {'code': -32601, 'message': 'Unknown tool: $toolName'});
       }
