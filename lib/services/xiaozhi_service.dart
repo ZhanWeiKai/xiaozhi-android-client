@@ -5,6 +5,7 @@ import 'dart:io';
 import 'package:permission_handler/permission_handler.dart';
 import '../services/xiaozhi_websocket_manager.dart';
 import '../utils/audio_util.dart';
+import 'device_mcp_tools.dart';
 import 'package:web_socket_channel/web_socket_channel.dart';
 
 /// 小智服务事件类型
@@ -56,6 +57,7 @@ class XiaozhiService {
   String? _sessionId;
 
   XiaozhiWebSocketManager? _webSocketManager;
+  final DeviceMcpTools _mcpTools = DeviceMcpTools();
   bool _isConnected = false;
   bool _isMuted = false;
   final List<XiaozhiServiceListener> _listeners = [];
@@ -731,17 +733,31 @@ class XiaozhiService {
     }
   }
 
+  /// MCP 响应发送 helper：原样回传 session_id 和 payload.id（对齐 simulate.html）
+  void _sendMcpResponse(Map<String, dynamic> jsonData, dynamic id,
+      {Map<String, dynamic>? result, Map<String, dynamic>? error}) {
+    final resp = <String, dynamic>{
+      'type': 'mcp',
+      'session_id': jsonData['session_id'],
+      'payload': <String, dynamic>{
+        'jsonrpc': '2.0',
+        'id': id,
+        if (result != null) 'result': result else if (error != null) 'error': error,
+      },
+    };
+    _webSocketManager?.sendMessage(jsonEncode(resp));
+  }
+
   /// 处理 MCP 消息（自建 Worker 模式）。
-  /// 客户端作为 MCP 服务端，回应上游的 initialize / tools/list / tools/call 等 JSON-RPC 请求。
-  /// 响应必须原样回传请求里的 session_id 和 payload.id（对齐 simulate.html）。
-  void _handleMcpMessage(Map<String, dynamic> jsonData) {
+  /// 客户端作为 MCP 服务端，回应 initialize / tools/list / tools/call。
+  /// tools/list 返回设备注册的工具；tools/call 派发执行并回结果。
+  Future<void> _handleMcpMessage(Map<String, dynamic> jsonData) async {
     final payload = jsonData['payload'];
     if (payload is! Map<String, dynamic>) {
       print('[VoiceCall] ← mcp: payload 非对象，忽略');
       return;
     }
 
-    final sessionId = jsonData['session_id'];
     final method = payload['method'] as String?;
     final id = payload['id']; // 可能是数字或 null
 
@@ -751,63 +767,48 @@ class XiaozhiService {
       return;
     }
 
-    Map<String, dynamic> resp;
-
     if (method == 'initialize') {
-      resp = {
-        'type': 'mcp',
-        'session_id': sessionId,
-        'payload': {
-          'jsonrpc': '2.0',
-          'id': id,
-          'result': {
-            'protocolVersion': '2024-11-05',
-            'capabilities': {'tools': {}},
-            'serverInfo': {'name': 'xiaozhi-android', 'version': '1.1.2'},
-          },
-        },
-      };
       print('[VoiceCall] → mcp initialize response id=$id');
-    } else if (method == 'tools/list') {
-      // 设备不暴露工具，返回空列表，Worker 代理会注入自己的工具
-      resp = {
-        'type': 'mcp',
-        'session_id': sessionId,
-        'payload': {
-          'jsonrpc': '2.0',
-          'id': id,
-          'result': {'tools': []},
-        },
-      };
-      print('[VoiceCall] → mcp tools/list response (empty) id=$id');
-    } else if (method == 'tools/call') {
-      // 没有该工具，返回 -32601（仍必须回答，避免上游挂起）
-      final params = payload['params'];
-      final toolName = (params is Map<String, dynamic>) ? (params['name'] ?? '') : '';
-      resp = {
-        'type': 'mcp',
-        'session_id': sessionId,
-        'payload': {
-          'jsonrpc': '2.0',
-          'id': id,
-          'error': {'code': -32601, 'message': 'Unknown tool: $toolName'},
-        },
-      };
-      print('[VoiceCall] → mcp tools/call error (no tools) id=$id');
-    } else {
-      // 其它带 id 的请求：统一回 method not found
-      resp = {
-        'type': 'mcp',
-        'session_id': sessionId,
-        'payload': {
-          'jsonrpc': '2.0',
-          'id': id,
-          'error': {'code': -32601, 'message': 'Method not found: $method'},
-        },
-      };
-      print('[VoiceCall] → mcp error (unhandled $method) id=$id');
+      _sendMcpResponse(jsonData, id, result: {
+        'protocolVersion': '2024-11-05',
+        'capabilities': {'tools': {}},
+        'serverInfo': {'name': 'xiaozhi-android', 'version': '1.1.2'},
+      });
+      return;
     }
 
-    _webSocketManager?.sendMessage(jsonEncode(resp));
+    if (method == 'tools/list') {
+      final tools = _mcpTools.toolsList();
+      print('[VoiceCall] → mcp tools/list response (count=${tools.length}) id=$id');
+      _sendMcpResponse(jsonData, id, result: {'tools': tools});
+      return;
+    }
+
+    if (method == 'tools/call') {
+      final params = payload['params'];
+      final toolName = (params is Map<String, dynamic>) ? (params['name'] ?? '') : '';
+      final arguments = (params is Map<String, dynamic> && params['arguments'] is Map)
+          ? Map<String, dynamic>.from(params['arguments'] as Map)
+          : <String, dynamic>{};
+      print('[VoiceCall] ← mcp tools/call: $toolName args=$arguments id=$id');
+      final result = await _mcpTools.call(toolName.toString(), arguments);
+      if (result != null) {
+        print('[VoiceCall] → mcp tools/call result ($toolName success=${result.success}): ${result.text}');
+        _sendMcpResponse(jsonData, id, result: {
+          'content': [{'type': 'text', 'text': result.text}],
+          'isError': !result.success,
+        });
+      } else {
+        print('[VoiceCall] → mcp tools/call unknown tool: $toolName id=$id');
+        _sendMcpResponse(jsonData, id,
+            error: {'code': -32601, 'message': 'Unknown tool: $toolName'});
+      }
+      return;
+    }
+
+    // 其它带 id 的请求：统一回 method not found
+    print('[VoiceCall] → mcp error (unhandled $method) id=$id');
+    _sendMcpResponse(jsonData, id,
+        error: {'code': -32601, 'message': 'Method not found: $method'});
   }
 }
