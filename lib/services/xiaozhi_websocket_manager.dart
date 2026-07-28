@@ -148,6 +148,10 @@ class XiaozhiWebSocketManager {
 
       final data = jsonDecode(responseBody);
 
+      if (_configType == 'worker') {
+        print('[worker_voice] OTA resp keys=${data.keys.toList()} websocket=${data['websocket']} mqtt=${data['mqtt']}');
+      }
+
       // 获取 websocket 信息
       final websocket = data['websocket'];
       if (websocket == null) {
@@ -210,6 +214,9 @@ class XiaozhiWebSocketManager {
 
         print('[connect-xiaozhi] 【步骤2-$_configType】开始连接 WebSocket (query params 认证)...');
         print('[connect-xiaozhi] 目标: $fullUrl');
+        if (_configType == 'worker') {
+          print('[worker_voice] WS connect: $fullUrl');
+        }
 
         _channel = IOWebSocketChannel.connect(Uri.parse(fullUrl));
       } else {
@@ -310,6 +317,7 @@ class XiaozhiWebSocketManager {
         "token": _token,
       };
       print('[connect-xiaozhi] 【步骤3-worker】发送 hello 消息 (含 features.mcp/device_id/device_mac/token): ${jsonEncode(hello)}');
+      print('[worker_voice] → hello: ${jsonEncode(hello)}');
     } else if (_configType == 'custom') {
       // 自定义 server hello：注入认证信息（与 WebUI handle_client_messages 中的注入逻辑一致）
       hello = {
