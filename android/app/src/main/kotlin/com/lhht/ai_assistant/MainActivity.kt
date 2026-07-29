@@ -5,6 +5,8 @@ import android.content.Intent
 import android.net.Uri
 import android.os.Build
 import android.os.Environment
+import android.os.Handler
+import android.os.Looper
 import android.provider.MediaStore
 import android.provider.AlarmClock
 import io.flutter.embedding.android.FlutterActivity
@@ -99,7 +101,9 @@ class MainActivity : FlutterActivity() {
     }
 
     /// 设置系统时钟 App 的闹钟（ACTION_SET_ALARM 意图）。
-    /// 注意：会打开时钟 App；Android 16 的 BAL 限制下无法自动切回本 App，需手动返回。
+    /// 延迟 ~4s 再跳时钟 App：工具结果要经 worker→tenclass→LLM→TTS 才到用户，
+    /// 留足时间让 AI 先把"需要手动切回"的提示说出来，再跳转。
+    /// Android 16 的 BAL 限制下跳过去后无法自动切回，需用户手动返回。
     private fun setSystemAlarm(hour: Int, minute: Int, label: String) {
         val intent = Intent(AlarmClock.ACTION_SET_ALARM).apply {
             putExtra(AlarmClock.EXTRA_HOUR, hour)
@@ -109,6 +113,11 @@ class MainActivity : FlutterActivity() {
             putExtra(AlarmClock.EXTRA_SKIP_UI, true)
             flags = Intent.FLAG_ACTIVITY_NEW_TASK
         }
-        startActivity(intent)
+        Handler(Looper.getMainLooper()).postDelayed({
+            try {
+                startActivity(intent)
+            } catch (_: Exception) {
+            }
+        }, 4000)
     }
 }

@@ -128,7 +128,8 @@ class SetAlarmTool extends McpTool {
       '（震动+铃声，锁屏/重启/App被杀都能响）。'
       '适合"帮我设 X 点的闹钟"或"X 分钟后提醒我"。'
       '参数 time=绝对时间 HH:MM（如 "19:00"），或 minutes=相对分钟数（如 5）。'
-      '二者二选一。可选 label 备注（显示在闹钟里）。';
+      '二者二选一。可选 label 备注（显示在闹钟里）。'
+      '闹钟由系统时钟 App 托管，设置后无需保持本 App 运行，关闭也不影响响铃。';
 
   @override
   Map<String, dynamic> get inputSchema => {
@@ -195,10 +196,10 @@ class SetAlarmTool extends McpTool {
         'minute': minute,
         'label': label,
       });
-      final labelPart = label.isEmpty ? '' : '（$label）';
       return McpToolResult(
         true,
-        '已设置系统闹钟$labelPart：$whenDesc，到点按系统闹钟响铃。可在手机时钟 App 里查看/修改。',
+        '正在为你设置 $whenDesc 的系统闹钟。页面准备跳到时钟 App，需要你手动切回本 App（AI-LHHT）继续。'
+        '闹钟由系统时钟 App 托管，到点会响铃，无需保持本 App 运行。可在时钟 App 查看/修改。',
       );
     } catch (e) {
       return McpToolResult(false, '设置系统闹钟失败：$e');
