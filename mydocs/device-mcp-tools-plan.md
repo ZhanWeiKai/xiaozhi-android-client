@@ -1,5 +1,6 @@
 # Android 设备 MCP 工具 — 实现规划
 
+> 日期：2026-07-29
 > 让 Android 手机变成 **MCP 工具服务端**，xiaozhi 服务端（经自建 Worker）的 LLM 能在对话中调用手机能力。
 > 例：用户说"帮我拍张照片" → LLM 调用拍照工具 → 手机拍照保存 → AI 回复确认。
 
@@ -40,21 +41,41 @@ tools/call  → 按 payload.params.name 派发到对应 handler，执行，回 {
 
 ---
 
-## 三、阶段一：拍照工具（已完成）✅
+## 三、阶段一：拍照工具（当前已完成：拍照 + 存相册；下一步改造为云端视觉）✅ / 🔄
 
-### 工具定义
+### 当前工具定义
 
 - **name**: `phone.take_photo`（`self.camera.take_photo` 别名到同一 handler）
-- **description**: 用手机摄像头拍一张照片并保存到相册（不弹相机 UI）
+- **当前 description**: 用手机摄像头拍一张照片并保存到相册（不弹相机 UI）
 - **inputSchema**: `{ camera: back|front（默认 back） }`
-- **返回**：文本，如"已用后置摄像头拍照并保存到相册：IMG_xxx.jpg"
+- **当前返回**：文本，如"已用后置摄像头拍照并保存到相册：IMG_xxx.jpg"
 
-### 实现要点
+### 当前实现要点
 
 - `camera` 包程序化拍照（`CameraController` + `takePicture`，无预览）。
 - 存相册：MethodChannel `saveImageToGallery` → 原生 MediaStore（`DCIM/Camera`）。
 - 权限：`CAMERA`（运行时申请）。
 - 已实测：worker 模式说"拍张照片"触发拍照并存相册。
+
+### 下一步改造目标（2026-07-29 新方案）
+
+`phone.take_photo` / `self.camera.take_photo` 将从"拍照并保存到本地相册"升级为"拍照并进行云端视觉理解"：
+
+```text
+Android 自动拍照
+→ 不保存到本地相册
+→ 上传临时 JPEG 到 Cloudflare Worker /vision/explain
+→ Worker 写入 R2 bucket
+→ Worker 读取图片并完成视觉理解
+→ Worker 同步返回图片描述文本
+→ Android 将描述文本作为 MCP tools/call result 回给上游
+→ 上游 LLM 继续生成回复
+→ TTS 播报图片理解结果
+```
+
+关键点：Worker 完成视觉理解后，**必须把文本结果返回给 Android，并由 Android 放进本次 MCP tool result**。如果只在 Worker 云端分析但不回传给上游，上游 LLM 没有工具结果可继续生成回复，通常不会进入 TTS 播放链路。
+
+详细实施方案见：`mydocs/device-mcp-photo-vision-implementation-plan.md`。
 
 ---
 
@@ -111,15 +132,40 @@ tools/call  → 按 payload.params.name 派发到对应 handler，执行，回 {
 
 ---
 
-## 七、视觉（阶段四，更后续）
+## 七、视觉（阶段四，下一步实施）🔄
 
-拍照后让 AI **看图描述** —— 服务端 `initialize` 已主动把 `/vision/explain` 端点 + token 告诉设备。拍照后把 JPEG 以 multipart POST 到该端点即可让 AI 看图（Worker 已有 `vision.js` + `attachVision` 管线）。本期不做。
+拍照后让 AI **看图描述**。服务端 `initialize` 已主动把 `/vision/explain` 端点 + token 告诉设备，Worker 已有 `vision.js` + `attachVision` 管线规划。
+
+### 目标链路
+
+```text
+phone.take_photo / self.camera.take_photo
+→ Android 拍照得到临时 JPEG
+→ Android multipart POST 到 Cloudflare Worker /vision/explain
+→ Worker 将图片写入 Cloudflare R2 bucket
+→ Worker 读取 R2 图片并调用视觉理解
+→ Worker 同步返回图片描述文本
+→ Android 将图片描述作为 MCP tools/call result 回给上游
+→ 上游 LLM 基于工具结果生成自然语言回复
+→ TTS 播报
+```
+
+### 分工
+
+- Android 侧：不再保存到本地相册；拍照后上传 `/vision/explain`；解析 Worker 返回的 `text`；把 `text` 作为 `McpToolResult` 回给上游。
+- Worker 侧：实现同步 `/vision/explain`；接收图片；写入 R2；完成视觉理解；返回 `{ ok, text, imageKey }`。
+
+### 原则
+
+Worker 不能只在云端完成视觉理解而不回传结果。视觉文本必须回到本次 MCP `tools/call` response，否则上游 LLM 不会拿到工具结果，也就无法继续走 TTS。
+
+详细实施方案见：`mydocs/device-mcp-photo-vision-implementation-plan.md`。
 
 ---
 
 ## 八、阶段计划
 
-- **阶段一（已完成）**：拍照 `phone.take_photo`（程序化拍照 + 存相册 + 文本回传），打通 tools/list + tools/call 注册表。
+- **阶段一（当前已完成）**：拍照 `phone.take_photo`（程序化拍照 + 存相册 + 文本回传），打通 tools/list + tools/call 注册表。
 - **阶段二（已完成）**：闹钟 `phone.set_alarm`（系统时钟 App，ACTION_SET_ALARM，实测语音触发可用）。
 - **阶段三**：手电筒、位置（简单工具）。
-- **阶段四**：视觉（拍照回传 AI 看图）。
+- **阶段四（下一步实施）**：视觉（拍照后不保存相册，上传 Cloudflare Worker `/vision/explain`，Worker 存 R2 并返回图片理解文本，Android 作为 MCP tool result 回给上游以触发 LLM/TTS）。

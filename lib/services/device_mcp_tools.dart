@@ -1,7 +1,11 @@
+import 'dart:async';
+import 'dart:convert';
 import 'dart:io';
 import 'package:flutter/services.dart';
+import 'package:http/http.dart' as http;
 import 'package:permission_handler/permission_handler.dart';
 import 'package:camera/camera.dart';
+import '../providers/config_provider.dart';
 
 /// 设备侧 MCP 工具：把手机能力暴露给 xiaozhi 服务端的 LLM 调用。
 /// 详见 mydocs/device-mcp-tools-plan.md
@@ -21,7 +25,8 @@ abstract class McpTool {
   Future<McpToolResult> call(Map<String, dynamic> arguments); // 执行
 }
 
-/// 拍照工具：程序化拍一张并保存到相册（不弹相机 UI）
+/// 拍照工具：程序化拍一张，直接调视觉模型理解画面（不保存本地相册，不弹相机 UI）
+/// 详见 mydocs/device-mcp-photo-vision-implementation-plan.md
 class TakePhotoTool extends McpTool {
   final MethodChannel channel;
   TakePhotoTool(this.channel);
@@ -31,9 +36,9 @@ class TakePhotoTool extends McpTool {
 
   @override
   String get description =>
-      '使用手机的摄像头拍一张照片并自动保存到相册（无需用户手动按快门）。'
+      '使用手机摄像头拍一张照片，不保存到本地相册，而是直接调用视觉模型理解画面并返回图片内容描述。'
       '可选参数 camera 指定使用后置(back)或前置(front)摄像头，默认 back。'
-      '用于用户说"帮我拍张照片 / 照一张 / 用前置拍一张"等场景。';
+      '用于用户说"帮我拍张照片看看 / 看看这是什么 / 识别一下画面 / 用前置看看我"等场景。';
 
   @override
   Map<String, dynamic> get inputSchema => {
@@ -52,6 +57,8 @@ class TakePhotoTool extends McpTool {
   @override
   Future<McpToolResult> call(Map<String, dynamic> arguments) async {
     final useFront = arguments['camera'] == 'front';
+    String? tempPath;
+
     try {
       // 1. 相机权限
       final status = await Permission.camera.request();
@@ -86,31 +93,125 @@ class TakePhotoTool extends McpTool {
         // 给自动对焦/曝光一点时间
         await Future.delayed(const Duration(milliseconds: 700));
         xfile = await controller.takePicture().timeout(const Duration(seconds: 4));
+        tempPath = xfile.path;
       } finally {
         await controller.dispose();
       }
 
-      // 4. 存到相册（MediaStore DCIM/Camera，经 MethodChannel 由原生侧写入）
-      final fileName = 'IMG_${DateTime.now().millisecondsSinceEpoch}.jpg';
-      String savedUri;
+      // 4. 设备侧直接调视觉模型（Anthropic 兼容 /v1/messages，不走 Worker/R2）
       try {
-        final res = await channel.invokeMethod('saveImageToGallery', {
-          'path': xfile.path,
-          'name': fileName,
-        });
-        savedUri = (res is Map && res['uri'] != null) ? res['uri'].toString() : fileName;
-      } catch (e) {
-        return McpToolResult(false, '已拍照，但保存到相册失败: $e');
-      }
-      // 清理临时文件
-      try {
-        await File(xfile.path).delete();
-      } catch (_) {}
+        final bytes = await File(xfile.path).readAsBytes();
+        final b64 = base64Encode(bytes);
 
-      return McpToolResult(true, '已用${useFront ? '前置' : '后置'}摄像头拍照并保存到相册：$fileName（$savedUri）');
+        final response = await http.post(
+          Uri.parse('${ConfigProvider.VISION_API_BASE}/v1/messages'),
+          headers: {
+            'Content-Type': 'application/json',
+            'Authorization': 'Bearer ${ConfigProvider.VISION_API_TOKEN}',
+            'anthropic-version': '2023-06-01',
+          },
+          body: jsonEncode({
+            'model': ConfigProvider.VISION_MODEL,
+            'max_tokens': 1024,
+            'messages': [
+              {
+                'role': 'user',
+                'content': [
+                  {
+                    'type': 'image',
+                    'source': {
+                      'type': 'base64',
+                      'media_type': 'image/jpeg',
+                      'data': b64,
+                    },
+                  },
+                  {
+                    'type': 'text',
+                    'text': '请描述这张照片里的内容。',
+                  },
+                ],
+              },
+            ],
+          }),
+        ).timeout(const Duration(seconds: 30));
+
+        final parsed = _parseVisionResponse(response.statusCode, response.body);
+        if (!parsed.success) {
+          return parsed;
+        }
+
+        return McpToolResult(true, '图片视觉理解结果：${parsed.text}');
+      } on TimeoutException {
+        return McpToolResult(false, '拍照成功，但视觉模型响应超时，请稍后再试');
+      } on SocketException catch (e) {
+        return McpToolResult(false, '拍照成功，但调用视觉模型失败：${e.message}');
+      } catch (e) {
+        return McpToolResult(false, '拍照成功，但视觉理解失败：$e');
+      }
     } catch (e) {
       return McpToolResult(false, '拍照失败：$e');
+    } finally {
+      // 清理临时文件（不管成功失败都不留存）
+      final path = tempPath;
+      if (path != null) {
+        try {
+          await File(path).delete();
+        } catch (_) {}
+      }
     }
+  }
+
+  /// 解析视觉模型响应：成功取 content 中第一个 text 块的 text。
+  McpToolResult _parseVisionResponse(int statusCode, String body) {
+    Map<String, dynamic>? json;
+    if (body.isNotEmpty) {
+      try {
+        final decoded = jsonDecode(body);
+        if (decoded is Map<String, dynamic>) {
+          json = decoded;
+        }
+      } catch (_) {}
+    }
+
+    if (statusCode != 200) {
+      // 代理/模型错误体：{"error":{"message":...}} 或 {"error":{"message":...,"type":...}}
+      final err = json?['error'];
+      final detail = (err is Map) ? (err['message']?.toString() ?? err['type']?.toString()) : null;
+      if (statusCode == 401 || statusCode == 403) {
+        return McpToolResult(false, '拍照成功，但视觉服务认证失败：${detail ?? 'HTTP $statusCode'}');
+      }
+      return McpToolResult(false, '拍照成功，但视觉服务返回异常：${detail ?? 'HTTP $statusCode'}');
+    }
+
+    if (json == null) {
+      return McpToolResult(false, '拍照成功，但视觉服务响应格式异常');
+    }
+
+    // Anthropic Messages 响应：content 为 block 数组，取第一个 type==text 的 text
+    final content = json['content'];
+    if (content is List) {
+      for (final block in content) {
+        if (block is Map && block['type'] == 'text') {
+          final text = block['text']?.toString().trim();
+          if (text != null && text.isNotEmpty) {
+            return McpToolResult(true, text);
+          }
+        }
+      }
+    }
+
+    // 兼容 OpenAI 风格 choices[0].message.content（代理可能透传）
+    final choices = json['choices'];
+    if (choices is List && choices.isNotEmpty) {
+      final msg = choices[0] is Map ? choices[0]['message'] : null;
+      final text = msg is Map ? msg['content']?.toString().trim() : null;
+      if (text != null && text.isNotEmpty) {
+        return McpToolResult(true, text);
+      }
+    }
+
+    final errMsg = json['message']?.toString() ?? json['error']?.toString();
+    return McpToolResult(false, '拍照成功，但视觉理解失败：${errMsg ?? '响应无可读文本'}');
   }
 }
 
@@ -166,7 +267,7 @@ class SetAlarmTool extends McpTool {
           DateTime.now().add(Duration(seconds: (minutes.toDouble() * 60).round()));
       hour = target.hour;
       minute = target.minute;
-      whenDesc = '${minutes}分钟后（${_hhmm(hour, minute)}）';
+      whenDesc = '$minutes分钟后（${_hhmm(hour, minute)}）';
     }
 
     // 绝对时间 HH:MM

@@ -98,6 +98,13 @@ class ConfigProvider extends ChangeNotifier {
   static const String WORKER_BASE = 'https://xiaozhi-myapp.weikaizhan80.workers.dev';
   static const String WORKER_OTA_URL = '${WORKER_BASE}/xiaozhi/ota/';
 
+  // 设备侧视觉理解：直接调 Anthropic 兼容代理（不走 Worker/R2）。
+  // 拍照后 base64 直接 POST /v1/messages，取 content[0].text 作为 MCP tool result。
+  // ⚠️ token 写死在源码，仅自用/调试；如分发需改回服务端代理。
+  static const String VISION_API_BASE = 'http://8.138.188.174:3002';
+  static const String VISION_API_TOKEN = 'sk-bqJK8dZ4keHlyixwNmMGVknIMKJSr6GF6QITwM6he7DY02pF';
+  static const String VISION_MODEL = 'gpt-5.5';
+
   Future<void> addXiaozhiConfig(
     String name, {
     String? customMacAddress,
