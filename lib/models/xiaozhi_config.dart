@@ -8,6 +8,7 @@ class XiaozhiConfig {
   final String? otaUrl; // 自定义 server 的 OTA 地址
   final String? clientId; // 自定义 server 的 CLIENT_ID (UUID)
   final String lang; // 语言（自建 Worker 使用：zh-CN/zh-TW/en-US/ja-JP），默认 zh-CN
+  final String firmwareVersion; // 设备当前固件版本（模拟 OTA 用，'-1'=未安装哨兵，默认 -1）
 
   XiaozhiConfig({
     required this.id,
@@ -19,6 +20,7 @@ class XiaozhiConfig {
     this.otaUrl,
     this.clientId,
     this.lang = 'zh-CN',
+    this.firmwareVersion = '-1',
   });
 
   factory XiaozhiConfig.fromJson(Map<String, dynamic> json) {
@@ -32,6 +34,7 @@ class XiaozhiConfig {
       otaUrl: json['otaUrl'],
       clientId: json['clientId'],
       lang: json['lang'] ?? 'zh-CN',
+      firmwareVersion: json['firmwareVersion'] ?? '-1',
     );
   }
 
@@ -46,6 +49,7 @@ class XiaozhiConfig {
       'otaUrl': otaUrl,
       'clientId': clientId,
       'lang': lang,
+      'firmwareVersion': firmwareVersion,
     };
   }
 
@@ -58,6 +62,7 @@ class XiaozhiConfig {
     String? otaUrl,
     String? clientId,
     String? lang,
+    String? firmwareVersion,
   }) {
     return XiaozhiConfig(
       id: id,
@@ -69,6 +74,7 @@ class XiaozhiConfig {
       otaUrl: otaUrl ?? this.otaUrl,
       clientId: clientId ?? this.clientId,
       lang: lang ?? this.lang,
+      firmwareVersion: firmwareVersion ?? this.firmwareVersion,
     );
   }
 }

@@ -7,7 +7,7 @@ import 'package:web_socket_channel/io.dart'
     if (dart.library.html) 'package:web_socket_channel/html.dart';
 
 /// 小智WebSocket事件类型
-enum XiaozhiEventType { connected, disconnected, message, error, binaryMessage }
+enum XiaozhiEventType { connected, disconnected, message, error, binaryMessage, firmwareUpdate }
 
 /// 小智WebSocket事件
 class XiaozhiEvent {
@@ -36,6 +36,9 @@ class XiaozhiWebSocketManager {
   String? _clientId;
   String _configType; // "official" / "custom" / "worker"
   String _lang; // 设备语言（自建 Worker：OTA Accept-Language + WS lang 参数）
+  String _firmwareVersion; // 设备当前固件版本（'-1'=未安装哨兵），OTA body 上报此版本
+  String? _pendingFwUrl; // OTA 响应里 worker 下发的固件下载地址（待自动下载）
+  String? _pendingFwVer; // OTA 响应里 worker 下发的目标固件版本
 
   final List<XiaozhiWebSocketListener> _listeners = [];
   bool _isReconnecting = false;
@@ -53,12 +56,14 @@ class XiaozhiWebSocketManager {
     required String wsUrl,
     String configType = 'official',
     String lang = 'zh-CN',
+    String firmwareVersion = '-1',
   }) : _deviceId = deviceId,
       _otaUrl = otaUrl,
       _clientId = clientId,
       _wsUrl = wsUrl,
       _configType = configType,
-      _lang = lang {
+      _lang = lang,
+      _firmwareVersion = firmwareVersion {
     print('[connect-xiaozhi] WebSocketManager 创建: configType=$configType, wsUrl=$wsUrl, otaUrl=$otaUrl, deviceId=$deviceId, clientId=$clientId, lang=$lang');
   }
 
@@ -122,7 +127,7 @@ class XiaozhiWebSocketManager {
         },
         'application': {
           'name': 'xiaozhi',
-          'version': '1.1.2',
+          'version': _firmwareVersion,
           'idf_version': 'v5.3.2-dirty',
         },
         'partition_table': [],
@@ -158,6 +163,24 @@ class XiaozhiWebSocketManager {
       final token = websocket['token'] as String;
       final otaWsUrl = websocket['url'] as String?;
 
+      // 自建 Worker：解析 worker 下发的固件升级信息 firmware{version,url}
+      String? fwVer;
+      String? fwUrl;
+      if (_configType == 'worker') {
+        final fw = data['firmware'];
+        if (fw is Map) {
+          fwVer = fw['version']?.toString();
+          fwUrl = fw['url']?.toString();
+          if (fwUrl != null && fwUrl.isNotEmpty) {
+            _pendingFwVer = fwVer;
+            _pendingFwUrl = fwUrl;
+            print('[connect-xiaozhi] ▲ OTA 固件升级可用: v$fwVer ($fwUrl)');
+          } else {
+            print('[connect-xiaozhi] OTA: 已是最新 (v$_firmwareVersion)');
+          }
+        }
+      }
+
       print('[connect-xiaozhi] ✓ OTA 注册成功');
       print('[connect-xiaozhi]   Token: ${token.length > 16 ? token.substring(0, 16) : token}...');
       if (otaWsUrl != null && otaWsUrl.isNotEmpty) {
@@ -167,6 +190,8 @@ class XiaozhiWebSocketManager {
       return {
         'token': token,
         if (otaWsUrl != null && otaWsUrl.isNotEmpty) 'wsUrl': otaWsUrl,
+        if (fwVer != null) 'firmwareVersion': fwVer,
+        if (fwUrl != null) 'firmwareUrl': fwUrl,
       };
     } catch (e) {
       print('[connect-xiaozhi] ✗ OTA 注册异常: $e');
@@ -247,6 +272,11 @@ class XiaozhiWebSocketManager {
         XiaozhiEvent(type: XiaozhiEventType.connected, data: null),
       );
 
+      // 4.5 自建 Worker：若 OTA 下发了固件 URL，自动下载（后台，不阻塞聊天）
+      if (_configType == 'worker' && _pendingFwUrl != null && _pendingFwVer != null) {
+        _autoDownloadFirmware(_pendingFwUrl!, _pendingFwVer!);
+      }
+
       // 5. 发送 hello 消息（官方和自定义的 hello 内容不同）
       Timer(const Duration(milliseconds: 200), () {
         _sendHelloMessage();
@@ -256,6 +286,51 @@ class XiaozhiWebSocketManager {
       _dispatchEvent(
         XiaozhiEvent(type: XiaozhiEventType.error, data: "连接失败: $e"),
       );
+    }
+  }
+
+  /// 自动下载 worker 下发的固件 bin（模拟 OTA：只存内存、报字节数，不真烧录）。
+  /// 下载成功 → 派发 firmwareUpdate{state:done} 事件（上层据此 bump 版本 + 持久化 + 刷 UI）。
+  /// 失败 → 派发 {state:error}，不 bump 版本。
+  Future<void> _autoDownloadFirmware(String url, String newVersion) async {
+    print('[connect-xiaozhi] 开始自动下载固件 v$newVersion: $url');
+    _dispatchEvent(XiaozhiEvent(type: XiaozhiEventType.firmwareUpdate, data: {
+      'state': 'downloading',
+      'from': _firmwareVersion,
+      'to': newVersion,
+    }));
+    try {
+      final client = HttpClient();
+      client.autoUncompress = true;
+      final req = await client.getUrl(Uri.parse(url));
+      final resp = await req.close();
+      if (resp.statusCode != 200) {
+        throw Exception('HTTP ${resp.statusCode}');
+      }
+      final bytes = await resp.fold<List<int>>(
+        <int>[],
+        (acc, chunk) => acc..addAll(chunk),
+      );
+      client.close();
+      final kb = (bytes.length / 1024).toStringAsFixed(1);
+      print('[connect-xiaozhi] ▲ 固件下载完成: ${bytes.length} bytes (${kb} KB)，模拟烧录(不写分区)');
+      final oldVer = _firmwareVersion;
+      _firmwareVersion = newVersion; // bump 上报版本，下次 OTA 匹配不再下发
+      _pendingFwUrl = null;
+      _pendingFwVer = null;
+      _dispatchEvent(XiaozhiEvent(type: XiaozhiEventType.firmwareUpdate, data: {
+        'state': 'done',
+        'from': oldVer,
+        'to': newVersion,
+        'bytes': bytes.length,
+      }));
+    } catch (e) {
+      print('[connect-xiaozhi] ✗ 固件下载失败: $e');
+      _dispatchEvent(XiaozhiEvent(type: XiaozhiEventType.firmwareUpdate, data: {
+        'state': 'error',
+        'to': newVersion,
+        'error': e.toString(),
+      }));
     }
   }
 

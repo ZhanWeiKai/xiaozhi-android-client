@@ -36,6 +36,8 @@ class _ChatScreenState extends State<ChatScreen> {
   final ScrollController _scrollController = ScrollController();
   bool _isLoading = false;
   XiaozhiService? _xiaozhiService; // 保持XiaozhiService实例
+  // 固件升级临时态（OTA 自动下载）：null=空闲；{state:'downloading'|'error', to, ...}
+  Map<String, dynamic>? _fwState;
   DifyService? _difyService; // 保持DifyService实例
   MiniMaxService? _minimaxService; // 保持MiniMaxService实例
   Timer? _connectionCheckTimer; // 添加定时器检查连接状态
@@ -198,6 +200,7 @@ class _ChatScreenState extends State<ChatScreen> {
           : ConfigProvider.OFFICIAL_WS_URL,
       configType: xiaozhiConfig.configType,
       lang: xiaozhiConfig.lang,
+      firmwareVersion: xiaozhiConfig.firmwareVersion,
     );
 
     // 添加消息监听器
@@ -254,7 +257,79 @@ class _ChatScreenState extends State<ChatScreen> {
         event.type == XiaozhiServiceEventType.disconnected) {
       // 当连接状态发生变化时，更新UI
       setState(() {});
+    } else if (event.type == XiaozhiServiceEventType.firmwareUpdate) {
+      _handleFirmwareUpdate(event.data);
     }
+  }
+
+  /// 处理 OTA 固件自动下载事件（来自 XiaozhiWebSocketManager）。
+  /// data: {state:downloading|done|error, from?, to, bytes?, error?}
+  void _handleFirmwareUpdate(dynamic data) {
+    if (data is! Map) return;
+    final state = data['state']?.toString();
+    final to = data['to']?.toString();
+    if (state == 'downloading') {
+      setState(() => _fwState = {'state': 'downloading', 'to': to});
+    } else if (state == 'done') {
+      // bump 版本并持久化
+      final configProvider =
+          Provider.of<ConfigProvider>(context, listen: false);
+      final configId = widget.conversation.configId;
+      final cfg = configProvider.xiaozhiConfigs
+          .where((c) => c.id == configId)
+          .firstOrNull;
+      if (cfg != null && to != null) {
+        configProvider
+            .updateXiaozhiConfig(cfg.copyWith(firmwareVersion: to));
+      }
+      setState(() => _fwState = null);
+    } else if (state == 'error') {
+      setState(() => _fwState = {'state': 'error', 'to': to});
+    }
+  }
+
+  /// AppBar 固件版本 chip：读当前 config 的 firmwareVersion + 下载临时态。
+  /// 仅 xiaozhi + worker 配置显示。
+  List<Widget> _buildFirmwareChip() {
+    final configId = widget.conversation.configId;
+    if (configId == null || configId.isEmpty) return [];
+    final configProvider = Provider.of<ConfigProvider>(context, listen: false);
+    final cfg = configProvider.xiaozhiConfigs
+        .where((c) => c.id == configId)
+        .firstOrNull;
+    if (cfg == null || cfg.configType != 'worker') return [];
+
+    final ver = cfg.firmwareVersion;
+    final label = ver == '-1' ? '未安装' : 'v$ver';
+    Color bg = Colors.blue.shade50;
+    Color fg = Colors.blue.shade700;
+    String text = '固件 $label';
+
+    final st = _fwState;
+    if (st != null) {
+      final state = st['state']?.toString();
+      final to = st['to']?.toString();
+      if (state == 'downloading') {
+        text = '固件 $label → v$to 下载中…';
+        bg = Colors.amber.shade50;
+        fg = Colors.amber.shade800;
+      } else if (state == 'error') {
+        text = '固件 $label（下载失败）';
+        bg = Colors.red.shade50;
+        fg = Colors.red.shade700;
+      }
+    }
+
+    return [
+      Container(
+        padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
+        decoration: BoxDecoration(
+          color: bg,
+          borderRadius: BorderRadius.circular(10),
+        ),
+        child: Text(text, style: TextStyle(color: fg, fontSize: 12)),
+      ),
+    ];
   }
 
   // 初始化 DifyService
@@ -421,27 +496,34 @@ class _ChatScreenState extends State<ChatScreen> {
                             fontSize: 18,
                           ),
                         ),
-                        Container(
-                          padding: const EdgeInsets.symmetric(
-                            horizontal: 8,
-                            vertical: 2,
-                          ),
-                          decoration: BoxDecoration(
-                            color: Colors.grey.shade200,
-                            borderRadius: BorderRadius.circular(10),
-                            boxShadow: [
-                              BoxShadow(
-                                color: Colors.black.withOpacity(0.03),
-                                blurRadius: 1,
-                                spreadRadius: 0,
-                                offset: const Offset(0, 1),
+                        Row(
+                          mainAxisSize: MainAxisSize.min,
+                          children: [
+                            Container(
+                              padding: const EdgeInsets.symmetric(
+                                horizontal: 8,
+                                vertical: 2,
                               ),
-                            ],
-                          ),
-                          child: const Text(
-                            '语音',
-                            style: TextStyle(color: Colors.grey, fontSize: 12),
-                          ),
+                              decoration: BoxDecoration(
+                                color: Colors.grey.shade200,
+                                borderRadius: BorderRadius.circular(10),
+                                boxShadow: [
+                                  BoxShadow(
+                                    color: Colors.black.withOpacity(0.03),
+                                    blurRadius: 1,
+                                    spreadRadius: 0,
+                                    offset: const Offset(0, 1),
+                                  ),
+                                ],
+                              ),
+                              child: const Text(
+                                '语音',
+                                style: TextStyle(color: Colors.grey, fontSize: 12),
+                              ),
+                            ),
+                            const SizedBox(width: 6),
+                            ..._buildFirmwareChip(),
+                          ],
                         ),
                       ],
                     ),

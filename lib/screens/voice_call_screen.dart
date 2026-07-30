@@ -90,6 +90,7 @@ class _VoiceCallScreenState extends State<VoiceCallScreen>
           : ConfigProvider.OFFICIAL_WS_URL,
       configType: widget.xiaozhiConfig.configType,
       lang: widget.xiaozhiConfig.lang,
+      firmwareVersion: widget.xiaozhiConfig.firmwareVersion,
       sessionId: widget.conversation.id,
     );
 

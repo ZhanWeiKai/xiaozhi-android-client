@@ -18,6 +18,7 @@ enum XiaozhiServiceEventType {
   voiceCallStart,
   voiceCallEnd,
   userMessage,
+  firmwareUpdate,
 }
 
 /// 语音通话状态（参考 WebUI ChatStateManager）
@@ -54,6 +55,7 @@ class XiaozhiService {
   final String wsUrl;
   final String configType;
   final String lang;
+  final String firmwareVersion; // 设备当前固件版本（'-1'=未安装哨兵），传给 manager 上报 OTA
   String? _sessionId;
 
   XiaozhiWebSocketManager? _webSocketManager;
@@ -89,6 +91,7 @@ class XiaozhiService {
     required String wsUrl,
     String configType = 'official',
     String lang = 'zh-CN',
+    String firmwareVersion = '-1',
     String? sessionId,
   }) {
     _instance ??= XiaozhiService._internal(
@@ -98,6 +101,7 @@ class XiaozhiService {
       wsUrl: wsUrl,
       configType: configType,
       lang: lang,
+      firmwareVersion: firmwareVersion,
       sessionId: sessionId,
     );
     return _instance!;
@@ -111,6 +115,7 @@ class XiaozhiService {
     required this.wsUrl,
     required this.configType,
     this.lang = 'zh-CN',
+    this.firmwareVersion = '-1',
     String? sessionId,
   }) {
     _sessionId = sessionId;
@@ -139,6 +144,7 @@ class XiaozhiService {
       wsUrl: wsUrl,
       configType: configType,
       lang: lang,
+      firmwareVersion: firmwareVersion,
     );
     _webSocketManager!.addListener(_onWebSocketEvent);
 
@@ -176,6 +182,7 @@ class XiaozhiService {
       _webSocketManager = XiaozhiWebSocketManager(
         deviceId: macAddress, otaUrl: otaUrl,
         clientId: clientId, wsUrl: wsUrl, configType: configType, lang: lang,
+        firmwareVersion: firmwareVersion,
       );
       _webSocketManager!.addListener(_onWebSocketEvent);
       await _webSocketManager!.connect();
@@ -208,6 +215,7 @@ class XiaozhiService {
       _webSocketManager = XiaozhiWebSocketManager(
         deviceId: macAddress, otaUrl: otaUrl,
         clientId: clientId, wsUrl: wsUrl, configType: configType, lang: lang,
+        firmwareVersion: firmwareVersion,
       );
       _webSocketManager!.addListener(_onWebSocketEvent);
       await _webSocketManager!.connect();
@@ -627,6 +635,12 @@ class XiaozhiService {
       case XiaozhiEventType.error:
         print('[VoiceCall] WebSocket 错误: ${event.data}');
         _dispatchEvent(XiaozhiServiceEvent(XiaozhiServiceEventType.error, event.data));
+        break;
+
+      case XiaozhiEventType.firmwareUpdate:
+        // manager 自动下载固件的结果（downloading/done/error），交给 UI 层 bump+持久化+刷新
+        print('[VoiceCall] 固件升级事件: ${event.data}');
+        _dispatchEvent(XiaozhiServiceEvent(XiaozhiServiceEventType.firmwareUpdate, event.data));
         break;
     }
   }
