@@ -215,6 +215,263 @@ class TakePhotoTool extends McpTool {
   }
 }
 
+/// 12306 余票查询工具：查某日两地之间的列车余票（公开接口，无需登录）。
+/// 在设备侧直接调 12306 公开查询 API——12306 对机房 IP 风控拦截查询，
+/// 必须从手机（移动 IP）本机调，所以这个工具纯 Android 侧、不依赖任何服务器。
+class QueryTrainTool extends McpTool {
+  QueryTrainTool();
+
+  /// 站名→编码 缓存（来自 station_name.js，进程内常驻）
+  static Map<String, String>? _stationCodes;
+
+  @override
+  String get name => 'phone.query_train';
+
+  @override
+  String get description =>
+      '查询 12306 某日两地之间的列车余票信息（公开接口，无需登录）。'
+      '参数 from=出发站(如"北京")、to=到达站(如"上海")、date=日期(YYYY-MM-DD)。'
+      '用于"查下周五北京到上海的高铁 / 看看明天去深圳还有没有票"等场景。'
+      '返回各车次到发时间与各席别余票。';
+
+  @override
+  Map<String, dynamic> get inputSchema => {
+    'type': 'object',
+    'properties': {
+      'from': {'type': 'string', 'description': '出发站，如 北京、北京南'},
+      'to': {'type': 'string', 'description': '到达站，如 上海、上海虹桥'},
+      'date': {'type': 'string', 'description': '日期 YYYY-MM-DD，如 2026-08-07'},
+    },
+    'required': ['from', 'to', 'date'],
+  };
+
+  @override
+  Future<McpToolResult> call(Map<String, dynamic> arguments) async {
+    final fromName = arguments['from']?.toString().trim();
+    final toName = arguments['to']?.toString().trim();
+    final dateStr = arguments['date']?.toString().trim();
+    if (fromName == null || toName == null || dateStr == null) {
+      return McpToolResult(false, '请提供 from、to、date 三个参数');
+    }
+    final dateCompact = dateStr.replaceAll('-', '');
+    if (!RegExp(r'^\d{8}$').hasMatch(dateCompact)) {
+      return McpToolResult(false, '日期格式不对，需要 YYYY-MM-DD，如 2026-08-07');
+    }
+
+    const ua =
+        'Mozilla/5.0 (Linux; Android 13; Pixel 7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Mobile Safari/537.36';
+
+    print('[xz_dbg] query_train: start from=$fromName to=$toName date=$dateStr');
+    try {
+      // 1. 站名→编码
+      final codes = await _stationCodesMap();
+      final fromCode = _resolveCode(codes, fromName);
+      final toCode = _resolveCode(codes, toName);
+      print('[xz_dbg] query_train: station map size=${codes.length} '
+          'fromCode=$fromCode toCode=$toCode');
+      if (fromCode == null) {
+        return McpToolResult(false, '找不到出发站「$fromName」');
+      }
+      if (toCode == null) {
+        return McpToolResult(false, '找不到到达站「$toName」');
+      }
+
+      // 2. 先打 init 页拿 session cookie（12306 查询需要）
+      final initResp = await http.get(
+        Uri.parse('https://kyfw.12306.cn/otn/leftTicket/init'),
+        headers: {'User-Agent': ua},
+      ).timeout(const Duration(seconds: 15));
+      final cookie = _extractCookie(initResp.headers['set-cookie']);
+      print('[xz_dbg] query_train: init HTTP ${initResp.statusCode} '
+          'cookieLen=${cookie.length}');
+
+      // 3. 查询余票（http 默认跟随 302 到 queryZ/queryA 等真实端点）
+      final queryResp = await http.get(
+        Uri.parse(
+            'https://kyfw.12306.cn/otn/leftTicket/query?leftTicketDTO.train_date=$dateCompact&leftTicketDTO.from_station=$fromCode&leftTicketDTO.to_station=$toCode&purpose_codes=ADULT'),
+        headers: {
+          'User-Agent': ua,
+          'Referer': 'https://kyfw.12306.cn/otn/leftTicket/init',
+          if (cookie.isNotEmpty) 'Cookie': cookie,
+        },
+      ).timeout(const Duration(seconds: 20));
+      print('[xz_dbg] query_train: query HTTP ${queryResp.statusCode} '
+          'bodyLen=${queryResp.body.length} '
+          'finalUrl=${queryResp.request?.url}');
+      // 打印 body 头部，便于排查 12306 返回的是 JSON 还是错误页
+      final head = queryResp.body.length > 200
+          ? queryResp.body.substring(0, 200)
+          : queryResp.body;
+      print('[xz_dbg] query_train: body head=$head');
+
+      if (queryResp.statusCode != 200) {
+        return McpToolResult(false, '查询失败：12306 返回 ${queryResp.statusCode}');
+      }
+      final result = _parseQueryResponse(queryResp.body);
+      print('[xz_dbg] query_train: parsed success=${result.success} '
+          'textLen=${result.text.length}');
+      return result;
+    } on TimeoutException {
+      print('[xz_dbg] query_train: timeout');
+      return McpToolResult(false, '查询超时，12306 响应慢，请稍后再试');
+    } on SocketException catch (e) {
+      print('[xz_dbg] query_train: socket error ${e.message}');
+      return McpToolResult(false, '网络错误：${e.message}');
+    } catch (e) {
+      print('[xz_dbg] query_train: error $e');
+      return McpToolResult(false, '查询失败：$e');
+    }
+  }
+
+  /// 获取并缓存站名→编码映射。station_name.js 格式：
+  /// var station_names='@bjs|北京|BJP|beijing|bjs|0|0000|北京|@bjd|北京东|BOP|...'
+  /// 每个 @ 分隔的条目里，第 2 字段是中文名，第 3 字段是站点编码。
+  static Future<Map<String, String>> _stationCodesMap() async {
+    if (_stationCodes != null && _stationCodes!.isNotEmpty) return _stationCodes!;
+    final resp = await http.get(
+      Uri.parse(
+          'https://kyfw.12306.cn/otn/resources/js/framework/station_name.js'),
+      headers: {
+        'User-Agent': 'Mozilla/5.0',
+        'Referer': 'https://kyfw.12306.cn/otn/leftTicket/init',
+      },
+    ).timeout(const Duration(seconds: 15));
+    final body = resp.body;
+    final start = body.indexOf("'");
+    final end = body.lastIndexOf("'");
+    final m = <String, String>{};
+    if (start >= 0 && end > start) {
+      final content = body.substring(start + 1, end);
+      for (final entry in content.split('@')) {
+        if (entry.isEmpty) continue;
+        final parts = entry.split('|');
+        if (parts.length > 2) {
+          final name = parts[1];
+          final code = parts[2];
+          if (name.isNotEmpty && code.isNotEmpty) {
+            m[name] = code;
+          }
+        }
+      }
+    }
+    _stationCodes = m;
+    return m;
+  }
+
+  /// 精确匹配优先；否则取包含关系的（用户说"北京"可命中"北京"/"北京南"主码）。
+  static String? _resolveCode(Map<String, String> m, String name) {
+    if (m.containsKey(name)) return m[name];
+    for (final k in m.keys) {
+      if (k.contains(name) || name.contains(k)) return m[k];
+    }
+    return null;
+  }
+
+  /// 从 Set-Cookie 头提取 name=value 对，拼成 Cookie 头值。
+  static String _extractCookie(String? setCookie) {
+    if (setCookie == null || setCookie.isEmpty) return '';
+    final re = RegExp(r'([A-Za-z_][\w-]+=[^;,]+)');
+    return re.allMatches(setCookie).map((e) => e.group(0)!).toSet().join('; ');
+  }
+
+  /// 解析 12306 leftTicket 响应并格式化为可播报文本。
+  /// 行格式（按 | 切分，以车次代码为锚，字段相对锚偏移，抗前导空字段位移）：
+  ///   锚+1 出发站编码 / 锚+2 到达站编码 / 锚+5 出发时间 / 锚+6 到达 / 锚+7 历时
+  ///   锚+26..+37 各席别余票
+  static McpToolResult _parseQueryResponse(String body) {
+    // 12306 响应可能带 BOM，先去掉
+    final cleaned = body.replaceFirst('﻿', '').trim();
+    // 12306 对机房/办公网 IP 会返回 HTML 错误页（不是 JSON），识别并给清晰提示
+    if (cleaned.isEmpty || cleaned.startsWith('<') || !cleaned.startsWith('{')) {
+      print('[xz_dbg] query_train: 非 JSON 响应，疑似 12306 风控拦截（IP 限制）');
+      return McpToolResult(false,
+          '12306 返回了错误页，当前网络可能被 12306 限制。请切换到 4G/5G 移动网络后再试。');
+    }
+    final decoded = jsonDecode(cleaned);
+    if (decoded is! Map<String, dynamic>) {
+      return McpToolResult(false, '12306 返回格式异常');
+    }
+    final data = decoded['data'];
+    if (data is! Map) {
+      final msg = decoded['messages']?.toString() ?? decoded['error_msg']?.toString();
+      return McpToolResult(false, '12306 查询失败：${msg ?? '无数据'}');
+    }
+    final result = data['result'];
+    final stationMap = (data['map'] is Map)
+        ? Map<String, String>.from((data['map'] as Map).cast())
+        : <String, String>{};
+    if (result is! List || result.isEmpty) {
+      return McpToolResult(true, '该日期路线暂无可用车次');
+    }
+
+    // 席别偏移（相对车次锚）→ 名称
+    const seatOffsets = <int, String>{
+      26: '商务/特等', 27: '特等', 28: '一等', 29: '二等',
+      30: '高级软卧', 31: '软卧', 32: '动卧', 33: '硬卧',
+      34: '软座', 35: '硬座', 36: '无座', 37: '其他',
+    };
+
+    final lines = <String>[];
+    var shown = 0;
+    for (final row in result) {
+      if (row is! String || row.isEmpty) continue;
+      final f = row.split('|');
+      if (f.length < 11) continue;
+      // 锚定车次字段：G/D/C/Z/T/K/L + 数字
+      var tIdx = -1;
+      for (var i = 0; i < f.length; i++) {
+        if (RegExp(r'^[GDCZTKL]\d+$').hasMatch(f[i])) {
+          tIdx = i;
+          break;
+        }
+      }
+      final train = tIdx >= 0 ? f[tIdx] : f[3];
+      String fromName, toName;
+      String depart, arrive, duration;
+      if (tIdx >= 0) {
+        fromName = (tIdx + 1 < f.length)
+            ? (stationMap[f[tIdx + 1]] ?? f[tIdx + 1])
+            : '';
+        toName = (tIdx + 2 < f.length)
+            ? (stationMap[f[tIdx + 2]] ?? f[tIdx + 2])
+            : '';
+        depart = (tIdx + 5 < f.length) ? f[tIdx + 5] : '';
+        arrive = (tIdx + 6 < f.length) ? f[tIdx + 6] : '';
+        duration = (tIdx + 7 < f.length) ? f[tIdx + 7] : '';
+      } else {
+        fromName = stationMap[f[4]] ?? f[4];
+        toName = stationMap[f[5]] ?? f[5];
+        depart = f[8];
+        arrive = f[9];
+        duration = f[10];
+      }
+      final seats = <String>[];
+      seatOffsets.forEach((off, label) {
+        final idx = (tIdx >= 0 ? tIdx : 3) + off;
+        if (idx < f.length) {
+          final v = f[idx].trim();
+          if (v.isNotEmpty && v != '--' && v != '0') {
+            seats.add('$label:$v');
+          }
+        }
+      });
+      final sb = StringBuffer('$train $fromName→$toName $depart-$arrive');
+      if (duration.isNotEmpty) sb.write(' 历时$duration');
+      if (seats.isNotEmpty) sb.write(' ${seats.join(' ')}');
+      lines.add(sb.toString());
+      shown++;
+      if (shown >= 6) break; // 限制条数，避免 TTS 文本过长
+    }
+    if (lines.isEmpty) {
+      return McpToolResult(true, '该日期路线暂无可用车次');
+    }
+    return McpToolResult(
+      true,
+      '查询到 ${result.length} 趟车次，前 $shown 趟：\n${lines.join('\n')}',
+    );
+  }
+}
+
 /// 闹钟工具：写入系统时钟 App（ACTION_SET_ALARM），真系统闹钟
 class SetAlarmTool extends McpTool {
   final MethodChannel channel;
@@ -319,6 +576,7 @@ class DeviceMcpTools {
 
   DeviceMcpTools() {
     _register(TakePhotoTool(channel));
+    _register(QueryTrainTool());
     _register(SetAlarmTool(channel));
     // 后续工具在此注册（阶段三）：
     // _register(TorchTool());

@@ -112,6 +112,7 @@ class ConfigProvider extends ChangeNotifier {
     final macAddress = customMacAddress ?? await _getDeviceMacAddress();
     final clientId = const Uuid().v4();
 
+
     final newConfig = XiaozhiConfig(
       id: DateTime.now().millisecondsSinceEpoch.toString(),
       name: name,

@@ -68,7 +68,7 @@
 │   └─ 持久卷 chromium-12306-config（登录态/cookie）
 │
 └─ playwright-booking 服务（新加，Node 小容器，同 docker 网络）
-    ├─ connectOverCDP('http://chromium-12306:9222')
+    ├─ connectOverCDP('http://chromium-12306:9223')   # 经 socat 代理
     ├─ POST /reserve   → 驱动 chromium 跑预约流程
     ├─ GET  /login-status → 探测是否已登录
     └─ 鉴权：X-Booking-Token 头
@@ -109,10 +109,25 @@ xiaozhi 链路（无改动）
 3. 重新写入带 `--ignore-certificate-errors` 和 `--remote-debugging-port=9222` 的 `/usr/bin/wrapped-chromium`（容器重建会丢之前的 in-place 修改，要么重建后重写，要么用自定义镜像/entrypoint 固化）。
    - **建议**：把修改后的 `wrapped-chromium` 用 `docker cp` 或挂载方式固化，避免每次重建丢失。后续可做自定义镜像。
 
+### 5.1.1 CDP 跨容器代理（socat 侧车）
+
+桌面版 Chromium 出于安全**硬绑 127.0.0.1**，`--remote-debugging-address=0.0.0.0` 被忽略。同 docker 网络里的 playwright 容器连不上 127.0.0.1（不同容器 ≠ 同一 localhost）。解法：加一个 socat 侧车容器，**共享 chromium 的网络命名空间**，把 9223 转发到 127.0.0.1:9222：
+
+```bash
+docker run -d --name chromium-cdp-proxy \
+  --network container:chromium-12306 \
+  --restart unless-stopped \
+  alpine/socat -d -d TCP-LISTEN:9223,reuseaddr,fork TCP:127.0.0.1:9222
+```
+
+- `--network container:chromium-12306`：共享 chromium 的网络栈，侧车绑的 9223 就暴露在 chromium 的网络接口上。
+- booking-net 里的 playwright 连 `http://chromium-12306:9223` → 经 socat → chromium CDP。
+- 9223 只在 docker 内网，不对公网开放。
+
 ### 5.2 新建 playwright-booking 服务
 
 - **镜像**：`node:20-alpine` + `npm i playwright-core`（只用 `connectOverCDP`，不下载浏览器二进制，体积小）。
-- **部署**：docker，加入 `booking-net`，连 `http://chromium-12306:9222`。
+- **部署**：docker，加入 `booking-net`，连 `http://chromium-12306:9223`（经 socat 代理，见 5.1.1）。
 - **对外端口**：映射一个宿主端口（如 `8800`）到公网，供 Android 调用；腾讯云安全组放行 `8800`。
 - **鉴权**：请求头 `X-Booking-Token: <token>`，token 写死常量（同 Android 侧）。
 
@@ -150,22 +165,19 @@ GET /login-status
 → { "logged_in": true }
 ```
 
-#### 预约流程（Playwright，待录制选择器后填实）
+#### 预约流程（Playwright，本地 codegen 录制）
 
-伪流程：
+**录制方式**：在**本地 PC** 用 `playwright codegen` 录，不在远程 noVNC 里录（本地浏览器顺、快）。流程：
 
-```text
-connectOverCDP('http://chromium-12306:9222')
-拿到已登录的 page（或新开 tab）
-goto 预约次票入口
-探测是否被踢回登录页 → 是则返回 not_logged_in
-填 起站/到站/日期/车次/乘客/席别
-点 提交预约
-等待结果提示
-抓结果文本 → 返回
-```
+1. 本地 `npx playwright codegen https://www.12306.cn`，弹出一个带录制器的 Chromium。
+2. 在里面登录 12306（录到的登录步骤后面删掉）、走一遍预约次票流程（进页面→填→提交）。
+3. codegen 实时吐出 `page.goto / getByRole / fill / click` 脚本骨架。
+4. 删掉登录相关步骤，只保留"预约"那段；把站点/日期/车次参数化。
+5. 把脚本部署到服务器 `playwright-booking` 服务，运行时 `connectOverCDP('http://chromium-12306:9223')` 连**已登录的**远程 chromium（cookie 在持久卷），跑预约段。
 
-具体选择器与 URL 在「实施步骤 2」录制。
+> CDP 的作用是**服务器跑脚本时连已登录 chromium**，不是用来录的。录制在本地完成。
+>
+> 新增操作（取消/查询）按需再录一段，各自一个脚本/接口。
 
 ### 5.3 资源评估
 
@@ -333,9 +345,10 @@ Android McpToolResult(true, text)
    - 改 `/usr/bin/wrapped-chromium` 加 `--remote-debugging-port=9222`（固化，避免重建丢失）。
    - 重建容器入 `booking-net`，9222 仅内部可达。
    - 重写 ignore-cert + cdp 两项到 wrapper，重启。
-2. **录制预约次票流程**
-   - 用户在 noVNC 里手动走一遍预约次票（进页面→填→提交），用 CDP 录 URL/选择器。
-   - 或服务端用 Playwright `codegen` 连 CDP 会话录制，产出脚本骨架。
+2. **录制预约次票流程（本地 PC）**
+   - 本地 `npx playwright codegen https://www.12306.cn` 录一遍预约次票流程。
+   - 删掉登录步骤、参数化站点/日期/车次，得到预约脚本骨架。
+   - 后续要取消/查询等操作，各自再录一段。
 3. **写 playwright-booking 服务**
    - `node:20-alpine` + `playwright-core`，`/reserve` + `/login-status`。
    - 入 `booking-net`，映射 8800 到公网，安全组放行 8800。
