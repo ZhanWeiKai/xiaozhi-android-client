@@ -9,9 +9,10 @@
 
 在 Android app（xiaozhi-android-client）连上自建 Worker 后，像 `simulate.html` 那样模拟 OTA 升级：
 
-1. **连接时 OTA 检查**：连 worker 时 POST `/xiaozhi/ota/`，解析 worker 下发的 `firmware.{version,url}`。
-2. **检测到新版自动下载**：worker 给了 `firmware.url` 就自动 fetch bin 到内存、报告字节数（不真烧录，Android 无 OTA 分区），下载后把"设备上报版本"升到新版，下次 OTA 检查显示 up to date。
+1. **连接时 OTA 检查**：连 worker 时 POST `/xiaozhi/ota/`，解析 worker 下发的 `firmware.{version,url}`。**仅自建 Worker 连接（`configType=='worker'`）做此模拟**；official/custom 的 OTA 不注入 firmware，跳过。
+2. **检测到新版自动下载**：worker 给了 `firmware.url` 就自动 fetch bin 到内存、报告字节数（不真烧录，Android 无 OTA 分区；**只存内存不落盘**），下载后把"设备上报版本"升到新版，下次 OTA 检查显示 up to date。
 3. **聊天页常驻显示当前固件版本**：在 chat 页 AppBar 常驻一个版本 chip，下载中显示"→ vX 下载中…"。
+4. **首次必升（-1 哨兵）**：fresh 设备（config 未存 firmware 版本）上报 `version:"-1"`；worker 是字符串不等比较，`目标版本 != "-1"` 恒成立 → 首次连必触发下载；下完 bump 成真实版本，下次匹配不再下。UI 上 "-1" 显示"未安装"。
 
 ## 2. 现状（Android 侧）
 
@@ -29,7 +30,7 @@
 
 ### 3.1 `lib/models/xiaozhi_config.dart` — 加固件版本字段
 
-加 `firmwareVersion`（设备当前"已安装"版本，默认 `'1.1.2'`），持久化进 SharedPreferences（随 config 一起存），重启后保留、下次 OTA 上报该版本。
+加 `firmwareVersion`（设备当前"已安装"版本，**默认 `'-1'`**（未安装哨兵），持久化进 SharedPreferences（随 config 一起存），重启后保留、下次 OTA 上报该版本。
 
 ```dart
 final String firmwareVersion;   // 新增，默认 '1.1.2'
@@ -143,9 +144,10 @@ AppBar 的 `title: Row(...)`（xiaozhi 类型那条分支，~386 行）里，名
 4. `chat_screen.dart`：AppBar 版本 chip + 监听事件刷新。
 5. `flutter analyze` + build apk + 装机，连 worker 模式测一次（改 wrangler VERSIONS 触发下发，验证自动下载 + chip 更新）。
 
-## 8. 待确认
+## 8. 待确认（已定）
 
-1. **版本 chip 放 AppBar**：还是想放别处（如 voice call 页 / 设置里）？默认 AppBar。
-2. **下载的 bin**：默认只存内存报字节数（同 simulate.html）。要不要落盘到 app 文档目录便于查看？默认不落盘。
-3. **周期性重查 OTA**：默认只在"连接时"查一次（你的描述）。要不要加定时器周期重查（如每 60s）？默认不加。
-4. **多 worker config 各自版本**：`firmwareVersion` 是 per-config（每个 worker 配置一个"设备"），各自独立升级。确认这个粒度 OK。
+1. ✅ 版本 chip 放 **AppBar**。
+2. ✅ 下载 bin **只存内存**，不落盘。
+3. ✅ **连接时查一次**，不加周期定时器。
+4. ✅ fresh 设备用 **`-1` 哨兵**：未存版本时报 `-1`，worker 字符串不等必触发首次下载，下完 bump 真实版本。版本 **per-config**（每个 worker 配置一个"设备"各自升级）。
+5. ✅ **仅 `configType=='worker'`** 做 OTA 模拟；official/custom 跳过。
