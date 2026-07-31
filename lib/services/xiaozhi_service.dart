@@ -147,6 +147,8 @@ class XiaozhiService {
       firmwareVersion: firmwareVersion,
     );
     _webSocketManager!.addListener(_onWebSocketEvent);
+    // 把设备 MAC 注入 MCP 工具，供 TakePhotoTool 上传 worker 时当 Device-Id
+    _mcpTools.macAddress = macAddress;
 
     await AudioUtil.initRecorder();
     await AudioUtil.initPlayer();
@@ -825,6 +827,16 @@ class XiaozhiService {
           'content': [{'type': 'text', 'text': result.text}],
           'isError': !result.success,
         });
+        // worker 远程拍照触发（带 question）：给用户在对话里发一条提示，让用户知道
+        final isWorkerCapture = toolName == 'self.camera.take_photo' &&
+            arguments['question'] != null;
+        if (isWorkerCapture) {
+          final note = result.success
+              ? '📷 收到 worker 远程拍照请求，已拍照并上传'
+              : '📷 收到 worker 远程拍照请求，但未完成：${result.text}';
+          _dispatchEvent(XiaozhiServiceEvent(
+              XiaozhiServiceEventType.textMessage, note));
+        }
       } else {
         print('[xz_dbg] → tools/call 未知工具: $toolName (${elapsed}ms)');
         _sendMcpResponse(jsonData, id,

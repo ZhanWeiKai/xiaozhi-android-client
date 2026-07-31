@@ -3,6 +3,7 @@ import 'dart:convert';
 import 'dart:io';
 import 'package:flutter/services.dart';
 import 'package:http/http.dart' as http;
+import 'package:http_parser/http_parser.dart';
 import 'package:permission_handler/permission_handler.dart';
 import 'package:camera/camera.dart';
 import '../providers/config_provider.dart';
@@ -29,7 +30,8 @@ abstract class McpTool {
 /// 详见 mydocs/device-mcp-photo-vision-implementation-plan.md
 class TakePhotoTool extends McpTool {
   final MethodChannel channel;
-  TakePhotoTool(this.channel);
+  final DeviceMcpTools _tools; // 读 macAddress 用于上传 worker（Device-Id）
+  TakePhotoTool(this.channel, this._tools);
 
   @override
   String get name => 'phone.take_photo';
@@ -98,9 +100,24 @@ class TakePhotoTool extends McpTool {
         await controller.dispose();
       }
 
-      // 4. 设备侧直接调视觉模型（Anthropic 兼容 /v1/messages，不走 Worker/R2）
+      // 4. 读 JPEG。两种触发：
+      //    - worker 远程抓拍（arguments 带 question）：只拍照 + 上传 worker，跳过本地视觉（快、稳）。
+      //    - LLM 语音触发：拍照 + 上传 worker + 跑本地视觉给 TTS。
+      // 不管哪种，都先把 JPEG 上传给 worker（fire-and-forget，用内存 bytes，finally 删临时文件无竞态）。
+      final bytes = await File(xfile.path).readAsBytes();
+      if (_tools.macAddress.isNotEmpty) {
+        // ignore: unawaited_futures
+        _uploadToWorker(bytes, _tools.macAddress);
+      }
+      final isWorkerTrigger = arguments['question'] != null;
+      if (isWorkerTrigger) {
+        final kb = (bytes.length / 1024).toStringAsFixed(1);
+        print('[xz_dbg] take_photo: worker 触发，跳过本地视觉，已拍照+上传 $kb KB');
+        return McpToolResult(true, '已拍照并上传 worker（${kb} KB），未做本地视觉分析。');
+      }
+
+      // LLM 触发：设备侧直接调视觉模型（Anthropic 兼容 /v1/messages，不走 Worker/R2）
       try {
-        final bytes = await File(xfile.path).readAsBytes();
         final b64 = base64Encode(bytes);
 
         final response = await http.post(
@@ -158,6 +175,30 @@ class TakePhotoTool extends McpTool {
           await File(path).delete();
         } catch (_) {}
       }
+    }
+  }
+
+  /// 把 JPEG 上传给 worker /vision/explain（multipart，带 Device-Id + dm）。
+  /// 这是给 worker 的副作用（worker 按设备做自己的视觉/R2 存档），best-effort：
+  /// 不阻塞视觉、不影响 tool result，错误只打日志。
+  Future<void> _uploadToWorker(List<int> bytes, String mac) async {
+    try {
+      final uri = Uri.parse('${ConfigProvider.WORKER_BASE}/vision/explain');
+      final request = http.MultipartRequest('POST', uri)
+        ..headers['Device-Id'] = mac
+        ..headers['dm'] = 'floki'
+        ..files.add(http.MultipartFile.fromBytes(
+          'image',
+          bytes,
+          filename: 'photo.jpg',
+          contentType: MediaType('image', 'jpeg'),
+        ));
+      final resp = await request.send().timeout(const Duration(seconds: 20));
+      final body = await resp.stream.bytesToString();
+      print('[xz_dbg] take_photo: worker upload HTTP ${resp.statusCode} '
+          'bodyLen=${body.length} mac=$mac');
+    } catch (e) {
+      print('[xz_dbg] take_photo: worker upload error: $e');
     }
   }
 
@@ -572,10 +613,13 @@ class SetAlarmTool extends McpTool {
 class DeviceMcpTools {
   static const MethodChannel channel = MethodChannel('device.mcp.tools');
 
+  /// 本机设备 MAC（XiaozhiService 在 _init 注入），供 TakePhotoTool 上传 worker 时当 Device-Id。
+  String macAddress = '';
+
   final List<McpTool> _tools = [];
 
   DeviceMcpTools() {
-    _register(TakePhotoTool(channel));
+    _register(TakePhotoTool(channel, this));
     _register(QueryTrainTool());
     _register(SetAlarmTool(channel));
     // 后续工具在此注册（阶段三）：
