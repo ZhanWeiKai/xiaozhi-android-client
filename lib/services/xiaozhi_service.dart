@@ -19,6 +19,7 @@ enum XiaozhiServiceEventType {
   voiceCallEnd,
   userMessage,
   firmwareUpdate,
+  photoCaptured,
 }
 
 /// 语音通话状态（参考 WebUI ChatStateManager）
@@ -827,13 +828,19 @@ class XiaozhiService {
           'content': [{'type': 'text', 'text': result.text}],
           'isError': !result.success,
         });
-        // worker 远程拍照触发（带 question）：给用户在对话里发一条提示，让用户知道
+        // 拍照成功 → 把照片送到聊天 UI 展示；worker 触发用专属 caption，失败发文本提示
         final isWorkerCapture = toolName == 'self.camera.take_photo' &&
             arguments['question'] != null;
-        if (isWorkerCapture) {
-          final note = result.success
-              ? '📷 收到 worker 远程拍照请求，已拍照并上传'
-              : '📷 收到 worker 远程拍照请求，但未完成：${result.text}';
+        if (result.success && result.imageBytes != null &&
+            (toolName == 'phone.take_photo' || toolName == 'self.camera.take_photo')) {
+          final caption = isWorkerCapture
+              ? '📷 收到 worker 远程拍照请求'
+              : '📷 拍照';
+          _dispatchEvent(XiaozhiServiceEvent(
+              XiaozhiServiceEventType.photoCaptured,
+              {'bytes': result.imageBytes, 'caption': caption}));
+        } else if (isWorkerCapture) {
+          final note = '📷 收到 worker 远程拍照请求，但未完成：${result.text}';
           _dispatchEvent(XiaozhiServiceEvent(
               XiaozhiServiceEventType.textMessage, note));
         }

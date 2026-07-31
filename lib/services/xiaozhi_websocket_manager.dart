@@ -43,6 +43,7 @@ class XiaozhiWebSocketManager {
   final List<XiaozhiWebSocketListener> _listeners = [];
   bool _isReconnecting = false;
   Timer? _reconnectTimer;
+  Timer? _heartbeatTimer; // 每 30s 发心跳，防空闲被服务端/代理断开
   StreamSubscription? _streamSubscription;
 
   /// 构造函数
@@ -272,6 +273,9 @@ class XiaozhiWebSocketManager {
         XiaozhiEvent(type: XiaozhiEventType.connected, data: null),
       );
 
+      // 启动心跳：每 30s 发一次 heartbeat，保持 WS 不被空闲断开（对齐 simulate.html）
+      _startHeartbeat();
+
       // 4.5 自建 Worker：若 OTA 下发了固件 URL，自动下载（后台，不阻塞聊天）
       if (_configType == 'worker' && _pendingFwUrl != null && _pendingFwVer != null) {
         _autoDownloadFirmware(_pendingFwUrl!, _pendingFwVer!);
@@ -350,6 +354,8 @@ class XiaozhiWebSocketManager {
   Future<void> disconnect() async {
     _reconnectTimer?.cancel();
     _isReconnecting = false;
+    _heartbeatTimer?.cancel();
+    _heartbeatTimer = null;
 
     await _streamSubscription?.cancel();
     _streamSubscription = null;
@@ -359,6 +365,16 @@ class XiaozhiWebSocketManager {
       _channel = null;
       print('$TAG: 连接已断开');
     }
+  }
+
+  /// 启动心跳：每 30s 发一次 heartbeat，防止 WS 空闲被服务端/代理断开（对齐 simulate.html）。
+  void _startHeartbeat() {
+    _heartbeatTimer?.cancel();
+    _heartbeatTimer = Timer.periodic(const Duration(seconds: 30), (_) {
+      if (_channel != null && isConnected) {
+        sendMessage(jsonEncode({'type': 'heartbeat'}));
+      }
+    });
   }
 
   /// 发送 Hello 消息
@@ -482,6 +498,8 @@ class XiaozhiWebSocketManager {
   /// 处理断开连接事件
   void _onDisconnected() {
     print('[connect-xiaozhi] ✗ WebSocket 连接已断开');
+    _heartbeatTimer?.cancel();
+    _heartbeatTimer = null;
     _dispatchEvent(
       XiaozhiEvent(type: XiaozhiEventType.disconnected, data: null),
     );

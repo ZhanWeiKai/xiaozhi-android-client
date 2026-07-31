@@ -259,6 +259,39 @@ class _ChatScreenState extends State<ChatScreen> {
       setState(() {});
     } else if (event.type == XiaozhiServiceEventType.firmwareUpdate) {
       _handleFirmwareUpdate(event.data);
+    } else if (event.type == XiaozhiServiceEventType.photoCaptured) {
+      _handlePhotoCaptured(event.data);
+    }
+  }
+
+  /// 拍照工具拍完后，把照片存到会话图片目录并以图片消息展示在对话里。
+  /// data: {bytes: Uint8List JPEG, caption: String}
+  Future<void> _handlePhotoCaptured(dynamic data) async {
+    if (data is! Map) return;
+    final bytes = data['bytes'];
+    if (bytes is! List<int>) return;
+    final caption = data['caption']?.toString() ?? '📷 拍照';
+    try {
+      final appDir = await getApplicationDocumentsDirectory();
+      final dir = Directory(
+          '${appDir.path}/conversations/${widget.conversation.id}/images');
+      if (!await dir.exists()) {
+        await dir.create(recursive: true);
+      }
+      final path = '${dir.path}/${const Uuid().v4()}.jpg';
+      await File(path).writeAsBytes(bytes);
+      final conversationProvider =
+          Provider.of<ConversationProvider>(context, listen: false);
+      await conversationProvider.addMessage(
+        conversationId: widget.conversation.id,
+        role: MessageRole.assistant,
+        content: caption,
+        isImage: true,
+        imageLocalPath: path,
+      );
+      if (mounted) setState(() {});
+    } catch (e) {
+      print('[chat] 保存拍照图片失败: $e');
     }
   }
 

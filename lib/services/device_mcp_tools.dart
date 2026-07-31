@@ -1,6 +1,7 @@
 import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
+import 'dart:typed_data';
 import 'package:flutter/services.dart';
 import 'package:http/http.dart' as http;
 import 'package:http_parser/http_parser.dart';
@@ -15,7 +16,8 @@ import '../providers/config_provider.dart';
 class McpToolResult {
   final bool success;
   final String text;
-  McpToolResult(this.success, this.text);
+  final Uint8List? imageBytes; // 拍照成功时带 JPEG bytes，供 UI 展示
+  McpToolResult(this.success, this.text, {this.imageBytes});
 }
 
 /// 一个 MCP 工具的抽象
@@ -113,7 +115,8 @@ class TakePhotoTool extends McpTool {
       if (isWorkerTrigger) {
         final kb = (bytes.length / 1024).toStringAsFixed(1);
         print('[xz_dbg] take_photo: worker 触发，跳过本地视觉，已拍照+上传 $kb KB');
-        return McpToolResult(true, '已拍照并上传 worker（${kb} KB），未做本地视觉分析。');
+        return McpToolResult(true, '已拍照并上传 worker（${kb} KB），未做本地视觉分析。',
+            imageBytes: bytes);
       }
 
       // LLM 触发：设备侧直接调视觉模型（Anthropic 兼容 /v1/messages，不走 Worker/R2）
@@ -157,7 +160,8 @@ class TakePhotoTool extends McpTool {
           return parsed;
         }
 
-        return McpToolResult(true, '图片视觉理解结果：${parsed.text}');
+        return McpToolResult(true, '图片视觉理解结果：${parsed.text}',
+            imageBytes: bytes);
       } on TimeoutException {
         return McpToolResult(false, '拍照成功，但视觉模型响应超时，请稍后再试');
       } on SocketException catch (e) {
