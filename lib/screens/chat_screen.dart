@@ -200,6 +200,7 @@ class _ChatScreenState extends State<ChatScreen> {
           : ConfigProvider.OFFICIAL_WS_URL,
       configType: xiaozhiConfig.configType,
       lang: xiaozhiConfig.lang,
+      workerBase: xiaozhiConfig.workerBase,
       firmwareVersion: xiaozhiConfig.firmwareVersion,
     );
 

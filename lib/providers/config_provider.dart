@@ -94,9 +94,10 @@ class ConfigProvider extends ChangeNotifier {
   static const String OFFICIAL_WS_URL = 'wss://api.tenclass.net/xiaozhi/v1/';
   static const String OFFICIAL_OTA_URL = 'https://api.tenclass.net/xiaozhi/ota/';
 
-  // 自建 Worker：写死部署域名，OTA 路径固定为 /xiaozhi/ota/（与 simulate.html 同源）
-  static const String WORKER_BASE = 'https://xiaozhi-myapp.weikaizhan80.workers.dev';
-  static const String WORKER_OTA_URL = '${WORKER_BASE}/xiaozhi/ota/';
+  // 自建 Worker：用户在添加配置时输入部署域名（workerBase），
+  // OTA 路径固定为 <workerBase>/xiaozhi/ota/（与 simulate.html 同源）
+  static const String DEFAULT_WORKER_BASE =
+      'https://xiaozhi-myapp.weikaizhan80.workers.dev';
 
   // 设备侧视觉理解：直接调 Anthropic 兼容代理（不走 Worker/R2）。
   // 拍照后 base64 直接 POST /v1/messages，取 content[0].text 作为 MCP tool result。
@@ -107,6 +108,8 @@ class ConfigProvider extends ChangeNotifier {
 
   Future<void> addXiaozhiConfig(
     String name, {
+
+
     String? customMacAddress,
   }) async {
     final macAddress = customMacAddress ?? await _getDeviceMacAddress();
@@ -153,13 +156,17 @@ class ConfigProvider extends ChangeNotifier {
     notifyListeners();
   }
 
-  /// 添加自建 Worker 配置（OTA 地址写死，连接方式同 simulate.html）
-  /// 与 custom 模式的区别：configType='worker'，OTA 地址固定为 WORKER_OTA_URL
+  /// 添加自建 Worker 配置（用户输入部署域名，OTA 地址由域名拼出）
+  /// 与 custom 模式的区别：configType='worker'，OTA 地址固定为 <workerBase>/xiaozhi/ota/
   /// lang: 设备语言（OTA Accept-Language 头 + WS lang 参数）
-  Future<void> addWorkerXiaozhiConfig(String name, String lang) async {
+  Future<void> addWorkerXiaozhiConfig(
+    String name,
+    String workerBase,
+    String lang,
+  ) async {
     final macAddress = await _getDeviceMacAddress();
     final clientId = const Uuid().v4();
-
+    final base = _normalizeBase(workerBase);
     final newConfig = XiaozhiConfig(
       id: DateTime.now().millisecondsSinceEpoch.toString(),
       name: name,
@@ -167,14 +174,28 @@ class ConfigProvider extends ChangeNotifier {
       macAddress: macAddress,
       token: '',
       configType: 'worker',
-      otaUrl: WORKER_OTA_URL,
+      otaUrl: '$base/xiaozhi/ota/',
       clientId: clientId,
+      workerBase: base,
       lang: lang,
     );
 
     _xiaozhiConfigs.add(newConfig);
     await _saveConfigs();
     notifyListeners();
+  }
+
+  /// 规整用户输入的 Worker 域名：去尾部斜杠、补 https:// 前缀。
+  String _normalizeBase(String input) {
+    var s = input.trim();
+    if (s.isEmpty) s = DEFAULT_WORKER_BASE;
+    if (!s.startsWith('http://') && !s.startsWith('https://')) {
+      s = 'https://$s';
+    }
+    while (s.endsWith('/')) {
+      s = s.substring(0, s.length - 1);
+    }
+    return s;
   }
 
   Future<void> updateXiaozhiConfig(XiaozhiConfig updatedConfig) async {

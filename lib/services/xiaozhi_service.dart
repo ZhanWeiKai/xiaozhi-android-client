@@ -56,6 +56,7 @@ class XiaozhiService {
   final String wsUrl;
   final String configType;
   final String lang;
+  final String? workerBase; // 自建 Worker 部署域名（用于拍照上传到 <workerBase>/vision/explain）
   final String firmwareVersion; // 设备当前固件版本（'-1'=未安装哨兵），传给 manager 上报 OTA
   String? _sessionId;
 
@@ -92,6 +93,7 @@ class XiaozhiService {
     required String wsUrl,
     String configType = 'official',
     String lang = 'zh-CN',
+    String? workerBase,
     String firmwareVersion = '-1',
     String? sessionId,
   }) {
@@ -102,6 +104,7 @@ class XiaozhiService {
       wsUrl: wsUrl,
       configType: configType,
       lang: lang,
+      workerBase: workerBase,
       firmwareVersion: firmwareVersion,
       sessionId: sessionId,
     );
@@ -116,6 +119,7 @@ class XiaozhiService {
     required this.wsUrl,
     required this.configType,
     this.lang = 'zh-CN',
+    this.workerBase,
     this.firmwareVersion = '-1',
     String? sessionId,
   }) {
@@ -150,6 +154,8 @@ class XiaozhiService {
     _webSocketManager!.addListener(_onWebSocketEvent);
     // 把设备 MAC 注入 MCP 工具，供 TakePhotoTool 上传 worker 时当 Device-Id
     _mcpTools.macAddress = macAddress;
+    // 注入用户配置的 Worker 域名，供 TakePhotoTool 上传到 <workerBase>/vision/explain
+    _mcpTools.workerBase = workerBase ?? '';
 
     await AudioUtil.initRecorder();
     await AudioUtil.initPlayer();

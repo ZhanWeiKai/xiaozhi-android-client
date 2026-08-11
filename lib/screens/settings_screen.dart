@@ -2316,7 +2316,7 @@ class _SettingsScreenState extends State<SettingsScreen>
                 ),
               ),
               const SizedBox(height: 12),
-              // 自建 Worker 选项（地址已内置，无需填写）
+              // 自建 Worker 选项（填入部署域名即可）
               InkWell(
                 onTap: () {
                   Navigator.pop(context);
@@ -2355,7 +2355,7 @@ class _SettingsScreenState extends State<SettingsScreen>
                             ),
                             const SizedBox(height: 4),
                             Text(
-                              '连接内置 Worker 服务（OTA 自动获取）',
+                              '填入你部署的 Worker 域名（OTA 自动获取）',
                               style: TextStyle(
                                 color: Colors.grey.shade600,
                                 fontSize: 13,
@@ -2814,9 +2814,12 @@ class _SettingsScreenState extends State<SettingsScreen>
     );
   }
 
-  /// 添加自建 Worker 配置弹窗（OTA 地址已内置写死，只需填名称和语言）
+  /// 添加自建 Worker 配置弹窗（用户输入部署域名 + 名称 + 语言）
   void _showAddWorkerXiaozhiConfigDialog() {
     final nameController = TextEditingController();
+    final workerBaseController = TextEditingController(
+      text: ConfigProvider.DEFAULT_WORKER_BASE,
+    );
     String selectedLang = 'zh-CN';
 
     showDialog(
@@ -2872,7 +2875,7 @@ class _SettingsScreenState extends State<SettingsScreen>
                 ),
                 const SizedBox(height: 8),
                 const Text(
-                  'Worker 服务地址已内置，连接信息通过 OTA 自动获取',
+                  '填入你部署的 Worker 域名，OTA 地址和照片上传将自动用它拼出',
                   style: TextStyle(color: Colors.grey, fontSize: 14),
                 ),
                 const SizedBox(height: 24),
@@ -2894,6 +2897,37 @@ class _SettingsScreenState extends State<SettingsScreen>
                     controller: nameController,
                     decoration: InputDecoration(
                       hintText: '例如：我的 Worker',
+                      hintStyle: TextStyle(color: Colors.grey.shade400),
+                      contentPadding: const EdgeInsets.symmetric(
+                        horizontal: 16,
+                        vertical: 14,
+                      ),
+                      border: InputBorder.none,
+                    ),
+                  ),
+                ),
+                const SizedBox(height: 16),
+                const Text(
+                  'Worker 地址',
+                  style: TextStyle(
+                    fontSize: 16,
+                    fontWeight: FontWeight.w600,
+                  ),
+                ),
+                const SizedBox(height: 8),
+                Container(
+                  decoration: BoxDecoration(
+                    color: Colors.white,
+                    borderRadius: BorderRadius.circular(12),
+                    border: Border.all(color: Colors.grey.shade300),
+                  ),
+                  child: TextField(
+                    controller: workerBaseController,
+                    keyboardType: TextInputType.url,
+                    autocorrect: false,
+                    enableSuggestions: false,
+                    decoration: InputDecoration(
+                      hintText: 'https://xxx.workers.dev',
                       hintStyle: TextStyle(color: Colors.grey.shade400),
                       contentPadding: const EdgeInsets.symmetric(
                         horizontal: 16,
@@ -2949,10 +2983,18 @@ class _SettingsScreenState extends State<SettingsScreen>
                       return;
                     }
 
+                    final workerBase = workerBaseController.text.trim();
+                    if (workerBase.isEmpty) {
+                      ScaffoldMessenger.of(context).showSnackBar(
+                        const SnackBar(content: Text('请填写 Worker 地址')),
+                      );
+                      return;
+                    }
+
                     Provider.of<ConfigProvider>(
                       context,
                       listen: false,
-                    ).addWorkerXiaozhiConfig(name, selectedLang);
+                    ).addWorkerXiaozhiConfig(name, workerBase, selectedLang);
 
                     Navigator.pop(context);
                     ScaffoldMessenger.of(context).showSnackBar(

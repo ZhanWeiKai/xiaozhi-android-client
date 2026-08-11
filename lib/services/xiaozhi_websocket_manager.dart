@@ -27,6 +27,8 @@ class XiaozhiWebSocketManager {
 
   // 自建 Worker 模式：模型固定（对齐 simulate.html）；语言由配置传入
   static const String WORKER_MODEL = 'floki';
+  // 自建 Worker OTA 版本路由：指向部署中的目标版本（0% traffic，header 路由）
+  static const String WORKER_VERSION_OVERRIDE = 'xiaozhi-dev-2="e6a0e360-ddaf-4cf4-95df-327b03dbcf98"';
 
   WebSocketChannel? _channel;
   String? _wsUrl;
@@ -107,10 +109,12 @@ class XiaozhiWebSocketManager {
       request.headers.set('Device-Id', _deviceId!);
       request.headers.set('Client-Id', _clientId!);
       request.headers.set('Content-Type', 'application/json');
-      // 自建 Worker：OTA 需要带 dm 和 Accept-Language（对齐 simulate.html）
+      // 自建 Worker：OTA 需要带 dm、Accept-Language（对齐 simulate.html）
+      // 版本路由：Cloudflare-Workers-Version-Overrides 将请求路由到指定的已部署版本
       if (_configType == 'worker') {
         request.headers.set('dm', WORKER_MODEL);
         request.headers.set('Accept-Language', _lang);
+        request.headers.set('Cloudflare-Workers-Version-Overrides', WORKER_VERSION_OVERRIDE);
       }
       request.write(jsonEncode({
         'version': 2,
@@ -118,6 +122,7 @@ class XiaozhiWebSocketManager {
         'psram_size': 0,
         'minimum_free_heap_size': 8318916,
         'mac_address': _deviceId,
+        'device_id': _deviceId,  // Worker OTA 接口要求此字段
         'uuid': _clientId,
         'chip_model_name': 'esp32s3',
         'chip_info': {
@@ -229,15 +234,29 @@ class XiaozhiWebSocketManager {
 
         // 构建带认证参数的 URL
         // custom: authorization/device-id/client-id（与 WebUI _build_ws_url 一致）
-        // worker: 额外拼 dm + lang（对齐 simulate.html）
+        // worker: headers 认证（dm + lang + Cloudflare-Workers-Version-Overrides）
         final fullUrl = _configType == 'worker'
-            ? _buildWorkerAuthUrl(_wsUrl!, _token!, _deviceId!, _clientId!)
+            ? _buildWorkerWsUrl(_wsUrl!)
             : _buildAuthUrl(_wsUrl!, _token!, _deviceId!, _clientId!);
 
-        print('[connect-xiaozhi] 【步骤2-$_configType】开始连接 WebSocket (query params 认证)...');
-        print('[connect-xiaozhi] 目标: $fullUrl');
-
-        _channel = IOWebSocketChannel.connect(Uri.parse(fullUrl));
+        if (_configType == 'worker') {
+          // worker 模式：headers 认证 + 版本路由
+          final headers = <String, String>{
+            'Authorization': 'Bearer $_token',
+            'Device-Id': _deviceId!,
+            'Client-Id': _clientId!,
+            'dm': WORKER_MODEL,
+            'lang': _lang,
+            'Cloudflare-Workers-Version-Overrides': WORKER_VERSION_OVERRIDE,
+          };
+          print('[connect-xiaozhi] 【步骤2-worker】开始连接 WebSocket (headers 认证 + 版本路由)...');
+          print('[connect-xiaozhi] 目标: $fullUrl');
+          _channel = IOWebSocketChannel.connect(Uri.parse(fullUrl), headers: headers);
+        } else {
+          print('[connect-xiaozhi] 【步骤2-$_configType】开始连接 WebSocket (query params 认证)...');
+          print('[connect-xiaozhi] 目标: $fullUrl');
+          _channel = IOWebSocketChannel.connect(Uri.parse(fullUrl));
+        }
       } else {
         // ===== 官方 xiaozhi.me 模式 =====
         // WS_URL 硬编码，认证通过 headers 传递
@@ -344,10 +363,9 @@ class XiaozhiWebSocketManager {
     return '$baseUrl${separator}authorization=Bearer%20$token&device-id=$deviceId&client-id=$clientId';
   }
 
-  /// 构建自建 Worker 的 WebSocket URL（query params 认证 + dm + lang，对齐 simulate.html）
-  String _buildWorkerAuthUrl(String baseUrl, String token, String deviceId, String clientId) {
-    final separator = baseUrl.contains('?') ? '&' : '?';
-    return '$baseUrl${separator}authorization=Bearer%20$token&device-id=$deviceId&client-id=$clientId&dm=$WORKER_MODEL&lang=$_lang';
+  /// 构建自建 Worker 的 WebSocket URL（不含认证参数，认证走 headers）
+  String _buildWorkerWsUrl(String baseUrl) {
+    return baseUrl;
   }
 
   /// 断开WebSocket连接

@@ -7,6 +7,7 @@ class XiaozhiConfig {
   final String configType; // "official" 或 "custom"
   final String? otaUrl; // 自定义 server 的 OTA 地址
   final String? clientId; // 自定义 server 的 CLIENT_ID (UUID)
+  final String? workerBase; // 自建 Worker 的部署域名（用户输入，用于上传照片到 /vision/explain）
   final String lang; // 语言（自建 Worker 使用：zh-CN/zh-TW/en-US/ja-JP），默认 zh-CN
   final String firmwareVersion; // 设备当前固件版本（模拟 OTA 用，'-1'=未安装哨兵，默认 -1）
 
@@ -19,6 +20,7 @@ class XiaozhiConfig {
     this.configType = 'official',
     this.otaUrl,
     this.clientId,
+    this.workerBase,
     this.lang = 'zh-CN',
     this.firmwareVersion = '-1',
   });
@@ -33,6 +35,7 @@ class XiaozhiConfig {
       configType: json['configType'] ?? 'official',
       otaUrl: json['otaUrl'],
       clientId: json['clientId'],
+      workerBase: json['workerBase'],
       lang: json['lang'] ?? 'zh-CN',
       firmwareVersion: json['firmwareVersion'] ?? '-1',
     );
@@ -48,6 +51,7 @@ class XiaozhiConfig {
       'configType': configType,
       'otaUrl': otaUrl,
       'clientId': clientId,
+      'workerBase': workerBase,
       'lang': lang,
       'firmwareVersion': firmwareVersion,
     };
@@ -61,6 +65,7 @@ class XiaozhiConfig {
     String? configType,
     String? otaUrl,
     String? clientId,
+    String? workerBase,
     String? lang,
     String? firmwareVersion,
   }) {
@@ -73,6 +78,7 @@ class XiaozhiConfig {
       configType: configType ?? this.configType,
       otaUrl: otaUrl ?? this.otaUrl,
       clientId: clientId ?? this.clientId,
+      workerBase: workerBase ?? this.workerBase,
       lang: lang ?? this.lang,
       firmwareVersion: firmwareVersion ?? this.firmwareVersion,
     );

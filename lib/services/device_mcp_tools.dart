@@ -182,12 +182,15 @@ class TakePhotoTool extends McpTool {
     }
   }
 
-  /// 把 JPEG 上传给 worker /vision/explain（multipart，带 Device-Id + dm）。
-  /// 这是给 worker 的副作用（worker 按设备做自己的视觉/R2 存档），best-effort：
-  /// 不阻塞视觉、不影响 tool result，错误只打日志。
+  /// 把 JPEG 上传给 worker（按设备做自己的视觉/R2 存档）。best-effort：不阻塞视觉、不影响 tool result。
   Future<void> _uploadToWorker(List<int> bytes, String mac) async {
+    final base = _tools.workerBase;
+    if (base.isEmpty) {
+      print('[xz_dbg] take_photo: 跳过 worker 上传（未配置 workerBase）');
+      return;
+    }
     try {
-      final uri = Uri.parse('${ConfigProvider.WORKER_BASE}/vision/explain');
+      final uri = Uri.parse('$base/vision/explain');
       final request = http.MultipartRequest('POST', uri)
         ..headers['Device-Id'] = mac
         ..headers['dm'] = 'floki'
@@ -619,6 +622,10 @@ class DeviceMcpTools {
 
   /// 本机设备 MAC（XiaozhiService 在 _init 注入），供 TakePhotoTool 上传 worker 时当 Device-Id。
   String macAddress = '';
+
+  /// 自建 Worker 部署域名（XiaozhiService 在 _init 注入），
+  /// TakePhotoTool 上传到 <workerBase>/vision/explain。空串表示该配置未提供。
+  String workerBase = '';
 
   final List<McpTool> _tools = [];
 
